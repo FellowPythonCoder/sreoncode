@@ -267,7 +267,14 @@ jobs:
             Write-Host "::error::$what: $text"
             throw "$what"
           }
+          # Everything below runs inside try/catch so a PowerShell exception - the kind thrown by
+          # Resolve-Path, Start-Process or a null path - lands in an annotation with its line and
+          # message instead of a bare "exit code 1" that nobody can read from here.
+          try {
           Get-ChildItem Browser/dist | Format-Table Name, Length
+          if (-not (Test-Path 'Browser\dist\SreonSetup.exe')) {
+            Notify "SreonSetup.exe is not in Browser/dist" "build step produced: $((Get-ChildItem Browser/dist -ErrorAction SilentlyContinue | Select-Object -Expand Name) -join ', '); freeze log tail: $(Get-Content Browser\freeze.log -Tail 12 -ErrorAction SilentlyContinue)"
+          }
           $installer = (Resolve-Path 'Browser\dist\SreonSetup.exe').Path
           $target = Join-Path $env:RUNNER_TEMP 'sreon-test'
           if (Test-Path $target) { Remove-Item $target -Recurse -Force }
@@ -307,6 +314,12 @@ jobs:
           Start-Sleep -Seconds 3
           if (Test-Path (Join-Path $here 'Sreon.exe')) { Write-Host '::warning::uninstaller left Sreon.exe behind' } else { "uninstaller cleaned up (exit $($out.ExitCode))" }
           if (Test-Path $keys[0] -ErrorAction SilentlyContinue) { Write-Host '::warning::ARP key survived the uninstall' }
+          "windows installer verified end to end"
+          } catch {
+            $line = ''
+            if ($_.InvocationInfo) { $line = "line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())" }
+            Notify "windows verification" "$($_.Exception.Message) | $line"
+          }
 
       - name: Linux - check the AppImage and the deb
         if: matrix.pack == 'linux'
@@ -364,6 +377,10 @@ jobs:
         # always(): a failed post-build check must not destroy the installers themselves -
         # they are what the release job republishes, and red stays red either way.
         if: always() && !cancelled()
+        # shell is explicit because the body is bash: the default shell on a Windows runner is
+        # pwsh, `case/esac` is not PowerShell, and the step failed at parse time - which is how a
+        # perfectly good SreonSetup.exe ended up never being uploaded from the Windows job.
+        shell: bash
         run: |
           mkdir -p out
           case "${{ matrix.pack }}" in

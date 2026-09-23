@@ -212,6 +212,7 @@ def main():
 
     if args.background_only:
         artwork()
+        print(json.dumps(layout(), indent=2))
         return 0
 
     if args.verify_only:

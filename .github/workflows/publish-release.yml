@@ -66,9 +66,17 @@ jobs:
             echo "::error::use [release <run id>] in the message of the commit that triggers this workflow"
             exit 1
           fi
-          gh run view "$id" --json name,status,conclusion,headSha,htmlUrl \
-            --jq '"publishing: \(.name) \(.status)/\(.conclusion) at \(.headSha[0:7]) - \(.htmlUrl)"'
+          # gh's own --json field list is narrower than the REST payload and its error goes to
+          # stderr, which never reaches an annotation, so the metadata read is plain `gh api`.
+          if ! meta="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" \
+                       --jq '"\(.name) \(.status)/\(.conclusion // "-") at \(.head_sha[0:7]) \(.html_url)"' 2>&1)"; then
+            echo "::error::run $id is not readable with this token: $meta"
+            exit 1
+          fi
+          echo "publishing run $id: $meta"
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq .head_sha)"
           echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Collect the artifacts of that run
         env:
@@ -132,7 +140,7 @@ jobs:
               --prerelease --target "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ steps.pick.outputs.id }}" --jq .head_sha)"
           else
             gh release create "$tag" --title "Sreon $version" --notes "$notes" --prerelease \
-              --target "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ steps.pick.outputs.id }}" --jq .head_sha)"
+              --target "${{ steps.pick.outputs.sha }}"
           fi
           for asset in bundle/* stage/*; do
             [ -f "$asset" ] || continue

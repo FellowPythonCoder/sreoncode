@@ -113,8 +113,14 @@ jobs:
       - name: Build the zip and publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.pick.outputs.id }}
+          RUN_SHA: ${{ steps.pick.outputs.sha }}
         run: |
-          set -e
+          set -euo pipefail
+          # gh writes its complaints to stderr, and stderr inside a runner is only readable in
+          # the log - which is not always reachable from here. So every external call is checked
+          # and its output is put in an annotation before failing.
+          boom () { echo "::error::$1: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-1200)"; exit 1; }
           version="$(tr -d '[:space:]' < Browser/VERSION)"
           tag="sreon-v$version"
           mkdir -p bundle
@@ -124,6 +130,19 @@ jobs:
             --stage stage --out "bundle/Sreon-$version-double-click.zip" \
             --sums "bundle/SHA256SUMS.txt" --allow-missing
           cp If-it-says-unverified.txt bundle/If-it-says-unverified.txt
+
+          sha="${RUN_SHA:-}"
+          if [ -z "$sha" ]; then
+            out="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha 2>&1)" \
+              || boom "could not resolve the head sha of run $RUN_ID" "$out"
+            sha="$out"
+          fi
+          if [ -z "$sha" ]; then
+            echo "::warning::no commit for run $RUN_ID, pointing the release at $GITHUB_SHA instead"
+            sha="$GITHUB_SHA"
+          fi
+          echo "release $tag will point at $sha"
+
           notes="Sreon $version - the desktop browser, ready to double-click.
 
           **Sreon-$version-double-click.zip** holds exactly three files:
@@ -136,24 +155,33 @@ jobs:
           for you, no dragging) and \`sreon_${version}_amd64.deb\` for Debian/Ubuntu.
           \`SHA256SUMS.txt\` covers the three files in the zip.
 
-          These are unsigned builds: no Apple Developer ID, no Authenticode certificate. macOS
-          shows its one-time 'cannot be opened' warning and Windows SmartScreen says the app
-          isn't commonly signed - \`If-it-says-unverified.txt\` has the real clicks for both.
-          Add the signing secrets from the README and this note disappears along with the warnings."
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "Sreon $version" --notes "$notes" \
-              --prerelease --target "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ steps.pick.outputs.id }}" --jq .head_sha)"
+          Built by run $RUN_ID of browser.yml. These are unsigned builds: no Apple Developer ID,
+          no Authenticode certificate. macOS shows its one-time 'cannot be opened' warning and
+          Windows SmartScreen says the app isn't commonly signed - \`If-it-says-unverified.txt\`
+          has the real clicks for both. Add the signing secrets from the README and this note
+          disappears along with the warnings."
+
+          if out="$(gh release view "$tag" 2>&1)"; then
+            out="$(gh release edit "$tag" --title "Sreon $version" --notes "$notes" \
+                     --prerelease --target "$sha" 2>&1)" || boom "gh release edit" "$out"
           else
-            gh release create "$tag" --title "Sreon $version" --notes "$notes" --prerelease \
-              --target "${{ steps.pick.outputs.sha }}"
+            out="$(gh release create "$tag" --title "Sreon $version" --notes "$notes" \
+                     --prerelease --target "$sha" 2>&1)" || boom "gh release create" "$out"
           fi
+          echo "release $tag ready"
+
           for asset in bundle/* stage/*; do
             [ -f "$asset" ] || continue
             # replacing an asset is the only way to keep a release idempotent across re-publishes
-            gh release delete-asset "$tag" "$(basename "$asset")" --yes >/dev/null 2>&1 || true
-            gh release upload "$tag" "$asset"
+            name="$(basename "$asset")"
+            gh release delete-asset "$tag" "$name" --yes >/dev/null 2>&1 || true
+            out="$(gh release upload "$tag" "$asset" --clobber 2>&1)" \
+              || boom "uploading $name ($(du -h "$asset" | cut -f1))" "$out"
+            echo "uploaded $name"
           done
-          echo "release assets:"
-          gh release view "$tag" --json assets,tagName,prerelease \
-            --jq '"\(.tagName) prerelease=\(.prerelease)" + (.assets[] | "\n  \(.name)  \(.size) bytes")'
+
+          out="$(gh release view "$tag" --json assets,tagName,prerelease \
+                  --jq '"\(.tagName) prerelease=\(.prerelease)" + (.assets[] | "\n  \(.name)  \(.size) bytes")' 2>&1)" \
+            || boom "reading the release back" "$out"
+          echo "$out"
           echo "::notice::https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"

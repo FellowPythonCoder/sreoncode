@@ -48,17 +48,22 @@ jobs:
         id: pick
         env:
           GH_TOKEN: ${{ github.token }}
+          MARKER: ${{ github.event.head_commit.message }}
         run: |
           set -e
-          id="$(git log -1 --pretty=%B | grep -oE '\[release [0-9]+\]' | grep -oE '[0-9]+' | head -1 || true)"
-          [ -z "$id" ] && id="${{ inputs.run_id }}"
+          # The event payload, not `git log`: checkout lands on the branch tip, and a push of
+          # several commits means the tip is not the commit that asked for the release.
+          id="$(printf '%s' "$MARKER" | grep -oE '\[release [0-9]+\]' | grep -oE '[0-9]+' | head -1 || true)"
+          [ -n "$id" ] || id="$(git log -1 --pretty=%B | grep -oE '\[release [0-9]+\]' | grep -oE '[0-9]+' | head -1 || true)"
+          [ -n "$id" ] || id="${{ inputs.run_id }}"
           if [ -z "$id" ]; then
             id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/browser.yml/runs?per_page=30" \
                    --jq ".workflow_runs[] | select(.head_branch==\"$GITHUB_REF_NAME\" and .conclusion==\"success\") | .id" \
                    | head -1 || true)"
           fi
           if [ -z "$id" ]; then
-            echo "::error::no successful browser.yml run found on $GITHUB_REF_NAME - build it first, or name one with [release <run id>]"
+            echo "::error::nothing to publish: no run id in the commit message, none passed, and no green browser.yml run on $GITHUB_REF_NAME"
+            echo "::error::use [release <run id>] in the message of the commit that triggers this workflow"
             exit 1
           fi
           gh run view "$id" --json name,status,conclusion,headSha,htmlUrl \

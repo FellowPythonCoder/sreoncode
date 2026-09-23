@@ -53,7 +53,14 @@ git push
 The release carries the zip plus each installer on its own (`Sreon.dmg`, `Sreon.pkg`,
 `SreonSetup.exe`, `Sreon.AppImage`, the `.deb`), `SHA256SUMS.txt`, and the guide, and it is
 marked pre-release while the builds are unsigned. The **Run workflow** button on
-`Sreon Release` does the same thing and takes an optional run number.
+`Sreon Release` does the same thing and takes an optional run number
+Everything in the zip is checked before it is uploaded, per platform, in CI: the DMG is mounted
+and inspected (payload, exec bit, `QtWebEngineCore.framework`, the `/Applications` drop link,
+the background and the Finder icon records), then the frozen binary is launched from the read-only
+image; the Windows installer is run silently, its installed tree, Start Menu entry and
+Add/Remove Programs record are checked, then it is uninstalled; the AppImage is unpacked with
+`--appimage-extract` and the deb is installed with `dpkg -i`.
+
 
 ## Artwork
 

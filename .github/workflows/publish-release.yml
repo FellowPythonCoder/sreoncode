@@ -53,6 +53,11 @@ jobs:
           set -e
           # The event payload, not `git log`: checkout lands on the branch tip, and a push of
           # several commits means the tip is not the commit that asked for the release.
+          #
+          # A named run id is used as-is even when that run is red: its per-platform artifacts are
+          # the verified outputs (each job checks its own installer), and its post-build checks are
+          # not what ships. The "newest green run" fallback stays strict, so nobody accidentally
+          # publishes a run where a whole platform failed.
           id="$(printf '%s' "$MARKER" | grep -oE '\[release [0-9]+\]' | grep -oE '[0-9]+' | head -1 || true)"
           [ -n "$id" ] || id="$(git log -1 --pretty=%B | grep -oE '\[release [0-9]+\]' | grep -oE '[0-9]+' | head -1 || true)"
           [ -n "$id" ] || id="${{ inputs.run_id }}"

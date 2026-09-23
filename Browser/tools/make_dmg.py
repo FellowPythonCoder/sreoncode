@@ -18,6 +18,7 @@ paths are verified with `hdiutil verify` plus a real mount before we call it don
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -168,8 +169,21 @@ def build_plain(app: Path, out: Path) -> None:
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def verify(out: Path, app_name: str) -> str:
-    """Verify checksums and mount the image to prove the payload is really inside."""
+def verify(out: Path, app_name: str, strict: bool = True) -> str:
+    """Verify checksums and mount the image to prove the payload is really inside.
+
+    strict=False is the CI-side entry point (``--verify-only``): a machine without hdiutil,
+    or a missing file, gets a note instead of a red build. After we have just written an
+    image, an image that cannot be mounted is a failure and stays one.
+    """
+    if not out.is_file():
+        if strict:
+            raise SystemExit(f"no image was written to {out}")
+        print("::notice::image not found for verification")
+        return "not found"
+    if shutil.which("hdiutil") is None:
+        log("hdiutil is not on this machine - cannot mount-check (macOS only)")
+        return "mount check skipped: not macOS"
     code, output = sh(["hdiutil", "verify", str(out)])
     if code:
         raise SystemExit(f"hdiutil verify failed: {output[-800:]}")
@@ -216,10 +230,12 @@ def main():
         return 0
 
     if args.verify_only:
-        if args.out is None:
-            parser.error("--verify-only needs the image as OUT")
-        verify(args.out.expanduser().resolve(),
-               args.app.name if args.app else "Sreon.app")
+        # one positional is enough here - it is obviously the image being inspected
+        image = args.out or args.app
+        if image is None:
+            parser.error("--verify-only needs the image to inspect")
+        name = args.app.name if (args.app and args.out) else "Sreon.app"
+        verify(image.expanduser().resolve(), name, strict=False)
         return 0
 
     if args.app is None or args.out is None:

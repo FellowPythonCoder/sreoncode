@@ -85,7 +85,7 @@ VIAddVersionKey /LANG=1033 "OriginalFilename" "SreonSetup.exe"
 
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "Open Sreon now"
-!define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\If it says unverified.txt"
+!define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\If-it-says-unverified.txt"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "Open the “can't be opened” guide"
 !define MUI_FINISHPAGE_LINK "Show me the installed files"
 !define MUI_FINISHPAGE_LINK_LOCATION "$INSTDIR"
@@ -106,7 +106,8 @@ Section "!Sreon" SecApp
   SectionIn RO
   SetOutPath "$INSTDIR"
   File /r "${SOURCE_DIR}/*.*"
-  File /oname="If it says unverified.txt" "${GUIDE}"
+  ; NSIS /oname takes a single unquoted token, so the guide keeps its hyphenated name.
+  File /oname=If-it-says-unverified.txt "${GUIDE}"
 
   WriteRegStr HKLM "${RUNKEY}" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "${RUNKEY}" "Version" "${VERSION}"
@@ -131,7 +132,7 @@ SectionEnd
 Section "Sreon in Start Menu" SecStartMenu
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0
-  CreateShortCut "$SMPROGRAMS\${APPNAME}\If Sreon can't be opened.lnk" "$INSTDIR\If it says unverified.txt"
+  CreateShortCut "$SMPROGRAMS\${APPNAME}\If Sreon cant be opened.lnk" "$INSTDIR\If-it-says-unverified.txt"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk" "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -157,7 +158,7 @@ SectionEnd
 Section "Uninstall"
   Delete "$DESKTOP\${APPNAME}.lnk"
   Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"
-  Delete "$SMPROGRAMS\${APPNAME}\If Sreon can't be opened.lnk"
+  Delete "$SMPROGRAMS\${APPNAME}\If Sreon cant be opened.lnk"
   Delete "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk"
   RMDir "$SMPROGRAMS\${APPNAME}"
   DeleteRegKey HKLM "Software\Clients\StartMenuInternet\${APPNAME}"

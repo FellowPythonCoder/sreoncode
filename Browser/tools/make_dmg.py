@@ -31,7 +31,7 @@ sys.path.insert(0, str(TOOLS))
 
 from make_dmg_background import ICON_SIZE, TEXT_SIZE, WINDOW, layout  # noqa: E402
 
-VERSION_DEFAULT = "0.5.1"
+VERSION_DEFAULT = "auto"   # make_dmg_background reads Browser/VERSION
 VOLUME_NAME = "Sreon"
 
 
@@ -92,8 +92,7 @@ def artwork() -> tuple[Path, Path]:
     one = ROOT / "assets" / "dmg-background.png"
     two = ROOT / "assets" / "dmg-background@2x.png"
     if not one.is_file() or not two.is_file():
-        code, _ = sh([sys.executable, str(TOOLS / "make_dmg_background.py"),
-                      "--version", os.environ.get("SREON_VERSION", VERSION_DEFAULT)])
+        code, _ = sh([sys.executable, str(TOOLS / "make_dmg_background.py")])
         if code:
             log("could not render artwork; falling back to a plain image")
     return one, two

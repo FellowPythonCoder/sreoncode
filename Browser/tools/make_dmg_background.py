@@ -298,6 +298,14 @@ def step_line(draw, scale, y, number, segments, x_left, *, size=13.5):
 DEFAULT_PLATFORMS = os.environ.get("SREON_PLATFORMS", "Apple silicon")
 
 
+def default_version() -> str:
+    """Browser/VERSION, so the artwork and the installers always show one number."""
+    try:
+        return (BROWSER / "VERSION").read_text(encoding="utf-8").splitlines()[0].strip()
+    except OSError:
+        return "0.0.0"
+
+
 def layout():
     """The numbers tools/build.py hands to dmgbuild (all in points)."""
     app_x = (CHIP[0] + CHIP[2]) // 2 - ICON_SIZE // 2
@@ -545,7 +553,8 @@ def main():
                         help="also write the Windows installer bitmaps")
     parser.add_argument("--convert-fonts", action="store_true",
                         help="rebuild tools/fonts/*.ttf from the site woff2 files, then exit")
-    parser.add_argument("--version", default=os.environ.get("SREON_VERSION", "0.5.1"))
+    parser.add_argument("--version",
+                        default=os.environ.get("SREON_VERSION") or default_version())
     parser.add_argument("--platforms", default=DEFAULT_PLATFORMS,
                         help="the small right-aligned line in the header")
     parser.add_argument("--out-dir", default=str(ASSETS))

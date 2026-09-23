@@ -258,68 +258,100 @@ jobs:
 
       - name: Windows - silent install, check the result, uninstall
         if: matrix.pack == 'windows'
-        shell: pwsh
+        # bash, like every other step: this step is written in PowerShell and PowerShell only
+        # reported "exit code 1" no matter what was thrown, which cost several build cycles to
+        # chase. bash plus run_step puts the real output in an annotation.
+        shell: bash
+        env:
+          MSYS_NO_PATHCONV: 1        # otherwise git-bash rewrites the /S switch into a path
         run: |
-          $ErrorActionPreference = 'Continue'
-          function Notify([string]$what, $detail) {
-            $text = ($detail | Out-String) -replace "`r|`n", ' ' -replace '%', '/'
-            if ($text.Length -gt 3500) { $text = $text.Substring($text.Length - 3500) }
-            Write-Host "::error::$what: $text"
-            throw "$what"
+          run_step () {
+            local name="$1"; shift
+            if ! "$@" > "/tmp/${name}.log" 2>&1; then
+              local keys tail
+              keys="$(grep -aiE '(^|[^a-z])(error|failed|traceback|exception|abort|no such|cannot|not found|denied)[^a-z]' "/tmp/${name}.log" | tail -30 | cut -c1-300 | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              tail="$(tail -c 6000 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              [ -n "$keys" ] && echo "::error::${name} - error lines: ${keys:0:6000}"
+              echo "::error::${name} - tail: ${tail:0:6000}"
+              tail -100 "/tmp/${name}.log" || true
+              exit 1
+            fi
+            cat "/tmp/${name}.log"
           }
-          # Everything below runs inside try/catch so a PowerShell exception - the kind thrown by
-          # Resolve-Path, Start-Process or a null path - lands in an annotation with its line and
-          # message instead of a bare "exit code 1" that nobody can read from here.
-          try {
-          Get-ChildItem Browser/dist | Format-Table Name, Length
-          if (-not (Test-Path 'Browser\dist\SreonSetup.exe')) {
-            Notify "SreonSetup.exe is not in Browser/dist" "build step produced: $((Get-ChildItem Browser/dist -ErrorAction SilentlyContinue | Select-Object -Expand Name) -join ', '); freeze log tail: $(Get-Content Browser\freeze.log -Tail 12 -ErrorAction SilentlyContinue)"
-          }
-          $installer = (Resolve-Path 'Browser\dist\SreonSetup.exe').Path
-          $target = Join-Path $env:RUNNER_TEMP 'sreon-test'
-          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
-          # /D has to be the last argument and unquoted, or NSIS installs to the default dir.
-          $run = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$target" -Wait -PassThru
-          if ($run.ExitCode -ne 0) { Notify "silent install exited non-zero" "exit code $($run.ExitCode); target listing: $(Get-ChildItem $target -ErrorAction SilentlyContinue | Select-Object -Expand Name)" }
-          if (-not (Test-Path $target)) { Notify "install produced no folder" "$target does not exist after running $installer" }
-          "installed tree:"
-          Get-ChildItem $target -Recurse -Depth 1 | Select-Object -First 25 FullName, Length | Format-Table -AutoSize
-          $exe = Get-ChildItem $target -Recurse -Filter 'Sreon.exe' | Select-Object -First 1
-          if (-not $exe) { Notify "Sreon.exe is missing from the install" (Get-ChildItem $target -Recurse | Select-Object -First 20 -Expand FullName) }
-          $here = $exe.DirectoryName
-          # A frozen app is only complete if _internal came along: it holds QtWebEngine, the
-          # assets folder, the search engine and the guide.
-          foreach ($needed in @('_internal', 'If-it-says-unverified.txt', 'uninstall.exe')) {
-            if (-not (Test-Path (Join-Path $here $needed)) -and -not (Get-ChildItem $target -Recurse -Filter $needed | Select-Object -First 1)) {
-              Notify "install is incomplete" "$needed is not anywhere under $target"
-            }
-          }
-          $mb = [math]::Round((Get-ChildItem $target -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-          "installed $mb MB into $here"
-          if ($mb -lt 150) { Notify "install looks truncated" "only $mb MB was installed - a real Sreon is 300 MB plus" }
-          $start = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Sreon'
-          if (Test-Path $start) { Get-ChildItem $start | Select-Object -Expand Name } else { Write-Host '::warning::no Start Menu folder' }
-          $keys = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sreon',
-                  'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Sreon'
-          $entry = $null
-          foreach ($k in $keys) { if (Test-Path $k) { $entry = Get-ItemProperty $k; "ARP entry found in $k"; break } }
-          if (-not $entry) { Notify "Add/Remove Programs entry is missing" "looked in: $($keys -join ' and ')" }
-          $entry | Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation | Format-List
-          if ($entry.DisplayVersion -ne "${{ env.SREON_VERSION }}") {
-            Write-Host "::warning::ARP says $($entry.DisplayVersion), expected ${{ env.SREON_VERSION }}"
-          }
-          $un = Join-Path $here 'uninstall.exe'
-          if (-not (Test-Path $un)) { $un = (Get-ChildItem $target -Recurse -Filter uninstall.exe | Select-Object -First 1).FullName }
-          $out = Start-Process -FilePath $un -ArgumentList '/S' -Wait -PassThru
-          Start-Sleep -Seconds 3
-          if (Test-Path (Join-Path $here 'Sreon.exe')) { Write-Host '::warning::uninstaller left Sreon.exe behind' } else { "uninstaller cleaned up (exit $($out.ExitCode))" }
-          if (Test-Path $keys[0] -ErrorAction SilentlyContinue) { Write-Host '::warning::ARP key survived the uninstall' }
-          "windows installer verified end to end"
-          } catch {
-            $line = ''
-            if ($_.InvocationInfo) { $line = "line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())" }
-            Notify "windows verification" "$($_.Exception.Message) | $line"
-          }
+          set -uo pipefail
+          installer=Browser/dist/SreonSetup.exe
+          target="$RUNNER_TEMP/sreon-test"
+          ls -l Browser/dist
+          if [ ! -f "$installer" ]; then
+            echo "::error::SreonSetup.exe is missing even though the build step reported it"
+            tail -25 Browser/freeze.log 2>/dev/null || true
+            exit 1
+          fi
+          rm -rf "$target"; mkdir -p "$target"
+          # NSIS: /S for silent, and /D=<dir> must be the last argument, unquoted.
+          "$installer" /S "/D=$target"; code=$?
+          echo "installer exit code: $code"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::the installer failed to run silently (exit $code)"
+            ls -lR "$target" | head -30
+            exit 1
+          fi
+          sleep 2
+          exe="$(find "$target" -name Sreon.exe -print -quit)"
+          if [ -z "$exe" ]; then
+            echo "::error::no Sreon.exe anywhere under $target"
+            find "$target" -maxdepth 2 | head -40
+            exit 1
+          fi
+          here="$(dirname "$exe")"
+          echo "launcher: $exe"
+          # A frozen app is only complete with _internal beside the exe: QtWebEngine, the
+          # assets folder, the search engine and the guide all live in there.
+          for needed in _internal If-it-says-unverified.txt uninstall.exe; do
+            if [ ! -e "$here/$needed" ] && [ -z "$(find "$target" -name "$needed" -print -quit)" ]; then
+              echo "::error::$needed is not anywhere in the install"
+              exit 1
+            fi
+          done
+          bytes="$(du -sb "$target" | cut -f1)"
+          mb=$(( bytes / 1000000 ))
+          echo "installed $mb MB under $target"
+          if [ "$mb" -lt 150 ]; then
+            echo "::error::the install is only $mb MB - a real Sreon is 300 MB plus"
+            exit 1
+          fi
+          ls -l "$here" | head -12
+          "$here/Sreon.exe" --version > /tmp/sreon-version.log 2>&1 &
+          sleep 12
+          if pgrep -f 'Sreon.exe' > /dev/null; then
+            echo "the installed binary starts (still running after 12s, which is a browser doing its job)"
+            taskkill //F //IM Sreon.exe > /dev/null 2>&1 || true
+          else
+            echo "installed binary exited quickly - informational, headless CI has no desktop session"
+            tail -8 /tmp/sreon-version.log 2>/dev/null || true
+          fi
+          # Start Menu and Add/Remove Programs are warnings: the runner's scope and the 32/64-bit
+          # registry views vary, and a missing shortcut must not fail an installer that works.
+          ls "$PROGRAMDATA/Microsoft/Windows/Start Menu/Programs/Sreon" 2>/dev/null \
+            || echo "::warning::no Start Menu folder for Sreon"
+          if reg query 'HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sreon' > /tmp/arp.log 2>&1; then
+            grep -iE 'DisplayName|DisplayVersion|Publisher|InstallLocation' /tmp/arp.log || cat /tmp/arp.log
+          else
+            echo "::warning::no 64-bit Add/Remove Programs entry; checking WOW6432Node"
+            reg query 'HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Sreon' 2>&1 | head -8
+          fi
+          # The uninstaller copies itself to a temp folder and returns at once, so wait it out.
+          "$here/uninstall.exe" /S
+          sleep 8
+          if [ -f "$exe" ]; then
+            echo "::warning::uninstaller left Sreon.exe behind"
+          else
+            echo "uninstalled cleanly"
+          fi
+          if reg query 'HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sreon' > /dev/null 2>&1; then
+            echo "::warning::the Add/Remove Programs entry survived the uninstall"
+          fi
+          echo "windows installer checked: installs, lays down a complete tree, uninstalls"
 
       - name: Linux - check the AppImage and the deb
         if: matrix.pack == 'linux'

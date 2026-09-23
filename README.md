@@ -38,7 +38,22 @@ Flags: `--skip-engine` (use a prebuilt `sreon-api`), `--only dmg`, `--installer-
 CI does all three platforms at once in
 [`.github/workflows/browser.yml`](.github/workflows/browser.yml) and uploads a
 `Sreon-<version>-double-click.zip` containing exactly the three double-click files.
-Tick **publish_release** on a manual run to also publish them as a GitHub release.
+
+To turn a finished build into a downloadable release, use
+[`.github/workflows/publish-release.yml`](.github/workflows/publish-release.yml). It
+re-downloads the artifacts of a build run and attaches them to a GitHub release, so nothing
+is refrozen (the installers are ~600 MB and a rebuild takes fifteen minutes):
+
+```sh
+git commit --allow-empty -m "[release] publish the newest green build"
+git commit --allow-empty -m "[release 35808314540] publish that run"   # or name one
+git push
+```
+
+The release carries the zip plus each installer on its own (`Sreon.dmg`, `Sreon.pkg`,
+`SreonSetup.exe`, `Sreon.AppImage`, the `.deb`), `SHA256SUMS.txt`, and the guide, and it is
+marked pre-release while the builds are unsigned. The **Run workflow** button on
+`Sreon Release` does the same thing and takes an optional run number.
 
 ## Artwork
 

@@ -33,6 +33,13 @@ def pack(stage: Path, target: Path, *, allow_missing: bool = False) -> dict:
     present = sorted(path.name for path in stage.iterdir() if path.is_file())
     if not present:
         raise SystemExit(f"nothing to pack: {stage} is empty")
+    # EXPECTED is a whitelist, not just a checklist: the release folder stages Sreon.pkg and
+    # the .deb next to the three installers, and those belong beside the zip as their own
+    # assets, never inside it. "Just the double-click files" is the whole point of the zip.
+    names = [name for name in EXPECTED if name in present]
+    extra = sorted(set(present) - set(EXPECTED))
+    for name in extra:
+        print(f"::warning::ignoring {name} for the zip (it ships as its own asset)", flush=True)
     missing = [name for name in EXPECTED if name not in present]
     if missing and not allow_missing:
         raise SystemExit(
@@ -48,7 +55,7 @@ def pack(stage: Path, target: Path, *, allow_missing: bool = False) -> dict:
         target.unlink()
     sizes = {}
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for name in present:
+        for name in names:
             source = stage / name
             info = zipfile.ZipInfo(name, date_time=time.localtime(source.stat().st_mtime)[:6])
             info.compress_type = zipfile.ZIP_DEFLATED
@@ -65,8 +72,8 @@ def pack(stage: Path, target: Path, *, allow_missing: bool = False) -> dict:
         if bad is not None:
             raise SystemExit(f"the zip we just wrote has a corrupt member: {bad}")
         entries = {entry.filename: entry for entry in archive.infolist()}
-        if set(entries) != set(present):
-            raise SystemExit(f"zip holds {sorted(entries)} expected {sorted(present)}")
+        if set(entries) != set(names):
+            raise SystemExit(f"zip holds {sorted(entries)} expected {sorted(names)}")
         for name, entry in entries.items():
             if entry.external_attr >> 16 != 0o755:
                 raise SystemExit(f"{name} lost its +x bit: {oct(entry.external_attr >> 16)}")
@@ -76,7 +83,8 @@ def pack(stage: Path, target: Path, *, allow_missing: bool = False) -> dict:
     return {
         "zip": str(target),
         "bytes": target.stat().st_size,
-        "entries": {name: sizes[name] for name in present},
+        "entries": {name: sizes[name] for name in names},
+        "ignored": extra,
         "missing": missing,
     }
 

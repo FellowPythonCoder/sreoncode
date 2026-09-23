@@ -260,18 +260,54 @@ jobs:
         if: matrix.pack == 'windows'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
+          function Notify([string]$what, $detail) {
+            $text = ($detail | Out-String) -replace "`r|`n", ' ' -replace '%', '/'
+            if ($text.Length -gt 3500) { $text = $text.Substring($text.Length - 3500) }
+            Write-Host "::error::$what: $text"
+            throw "$what"
+          }
           Get-ChildItem Browser/dist | Format-Table Name, Length
+          $installer = (Resolve-Path 'Browser\dist\SreonSetup.exe').Path
           $target = Join-Path $env:RUNNER_TEMP 'sreon-test'
-          Start-Process -FilePath "Browser\dist\SreonSetup.exe" -ArgumentList "/S","/D=$target" -Wait
-          if (-not (Test-Path "$target\Sreon.exe")) { Get-ChildItem $target -ErrorAction SilentlyContinue; throw "installer did not leave Sreon.exe in $target" }
-          Get-ChildItem $target | Select-Object -First 12 Name, Length | Format-Table
+          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          # /D has to be the last argument and unquoted, or NSIS installs to the default dir.
+          $run = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { Notify "silent install exited non-zero" "exit code $($run.ExitCode); target listing: $(Get-ChildItem $target -ErrorAction SilentlyContinue | Select-Object -Expand Name)" }
+          if (-not (Test-Path $target)) { Notify "install produced no folder" "$target does not exist after running $installer" }
+          "installed tree:"
+          Get-ChildItem $target -Recurse -Depth 1 | Select-Object -First 25 FullName, Length | Format-Table -AutoSize
+          $exe = Get-ChildItem $target -Recurse -Filter 'Sreon.exe' | Select-Object -First 1
+          if (-not $exe) { Notify "Sreon.exe is missing from the install" (Get-ChildItem $target -Recurse | Select-Object -First 20 -Expand FullName) }
+          $here = $exe.DirectoryName
+          # A frozen app is only complete if _internal came along: it holds QtWebEngine, the
+          # assets folder, the search engine and the guide.
+          foreach ($needed in @('_internal', 'If-it-says-unverified.txt', 'uninstall.exe')) {
+            if (-not (Test-Path (Join-Path $here $needed)) -and -not (Get-ChildItem $target -Recurse -Filter $needed | Select-Object -First 1)) {
+              Notify "install is incomplete" "$needed is not anywhere under $target"
+            }
+          }
+          $mb = [math]::Round((Get-ChildItem $target -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+          "installed $mb MB into $here"
+          if ($mb -lt 150) { Notify "install looks truncated" "only $mb MB was installed - a real Sreon is 300 MB plus" }
           $start = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Sreon'
-          if (Test-Path $start) { Get-ChildItem $start | Select-Object Name } else { Write-Host "no Start Menu folder (user scope?)" }
-          $uninstall = Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sreon" -ErrorAction SilentlyContinue
-          if ($uninstall) { $uninstall | Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation | Format-List } else { throw "Add/Remove Programs entry is missing" }
-          "installed ok: $((Get-ChildItem $target -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB) MB"
-          Start-Process -FilePath "$target\uninstall.exe" -ArgumentList "/S" -Wait
-          if (Test-Path "$target\Sreon.exe") { Write-Host "WARNING: uninstaller left files behind" } else { Write-Host "uninstaller cleaned up" }
+          if (Test-Path $start) { Get-ChildItem $start | Select-Object -Expand Name } else { Write-Host '::warning::no Start Menu folder' }
+          $keys = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sreon',
+                  'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Sreon'
+          $entry = $null
+          foreach ($k in $keys) { if (Test-Path $k) { $entry = Get-ItemProperty $k; "ARP entry found in $k"; break } }
+          if (-not $entry) { Notify "Add/Remove Programs entry is missing" "looked in: $($keys -join ' and ')" }
+          $entry | Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation | Format-List
+          if ($entry.DisplayVersion -ne "${{ env.SREON_VERSION }}") {
+            Write-Host "::warning::ARP says $($entry.DisplayVersion), expected ${{ env.SREON_VERSION }}"
+          }
+          $un = Join-Path $here 'uninstall.exe'
+          if (-not (Test-Path $un)) { $un = (Get-ChildItem $target -Recurse -Filter uninstall.exe | Select-Object -First 1).FullName }
+          $out = Start-Process -FilePath $un -ArgumentList '/S' -Wait -PassThru
+          Start-Sleep -Seconds 3
+          if (Test-Path (Join-Path $here 'Sreon.exe')) { Write-Host '::warning::uninstaller left Sreon.exe behind' } else { "uninstaller cleaned up (exit $($out.ExitCode))" }
+          if (Test-Path $keys[0] -ErrorAction SilentlyContinue) { Write-Host '::warning::ARP key survived the uninstall' }
+
       - name: Linux - check the AppImage and the deb
         if: matrix.pack == 'linux'
         run: |
@@ -325,6 +361,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - name: Collect the double-click files
+        # always(): a failed post-build check must not destroy the installers themselves -
+        # they are what the release job republishes, and red stays red either way.
+        if: always() && !cancelled()
         run: |
           mkdir -p out
           case "${{ matrix.pack }}" in
@@ -340,6 +379,7 @@ jobs:
           esac
           ls -lh out
       - name: Upload ${{ matrix.name }} installers
+        if: always() && !cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: sreon-${{ matrix.pack }}

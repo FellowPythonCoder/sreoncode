@@ -148,6 +148,21 @@ def test_double_click_zip_holds_exactly_the_three_installers(tmp_path):
     # unzipping is exactly the failure this zip exists to avoid.
 
 
+def test_double_click_zip_excludes_everything_but_the_three(tmp_path):
+    """The release folder also stages Sreon.pkg and the .deb - the zip must not swallow them."""
+    import make_double_click_zip as module
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    for name in list(module.EXPECTED) + ["Sreon.pkg", "sreon_0.5.1_amd64.deb"]:
+        (stage / name).write_bytes(b"x" * 256)
+    target = tmp_path / "out.zip"
+    summary = module.pack(stage, target)
+    import zipfile
+    with zipfile.ZipFile(target) as archive:
+        assert sorted(archive.namelist()) == sorted(module.EXPECTED)
+    assert summary["ignored"] == ["Sreon.pkg", "sreon_0.5.1_amd64.deb"]
+
+
 def test_double_click_zip_refuses_a_partial_set(tmp_path):
     import make_double_click_zip as module
     stage = tmp_path / "stage"
@@ -157,6 +172,20 @@ def test_double_click_zip_refuses_a_partial_set(tmp_path):
         module.pack(stage, tmp_path / "out.zip")
     summary = module.pack(stage, tmp_path / "out.zip", allow_missing=True)
     assert summary["missing"] == ["SreonSetup.exe", "Sreon.AppImage"]
+
+
+def test_registry_view_is_set_where_nsis_allows_it():
+    """SetRegView is a Section/Function command, and makensis is 32-bit.
+
+    At the top of the file it aborts with "command SetRegView not valid outside Section or
+    Function"; left out entirely, the uninstall entry lands in WOW6432Node even though the
+    app is 64-bit. So: inside the sections, and never at column zero.
+    """
+    script = (BROWSER / "installer" / "nsis" / "Sreon.nsi").read_text(encoding="utf-8")
+    views = [line for line in script.splitlines() if line.strip().startswith("SetRegView 64")]
+    assert len(views) >= 3, "the install, browser-list and uninstall sections all need the view set"
+    assert all(line.startswith(" ") for line in views), "SetRegView must be indented, inside a Section"
+    assert not re.search(r"^SetRegView", script, re.M), "SetRegView at global scope does not compile"
 
 
 @pytest.mark.parametrize("tool", ["build.py", "make_dmg.py", "make_dmg_background.py"])

@@ -121,7 +121,13 @@ Section "!Sreon" SecApp
   ; NSIS /oname takes a single unquoted token, so the guide keeps its hyphenated name.
   File /oname=If-it-says-unverified.txt "${GUIDE}"
 
+  ; The upgrade hint first, in the default view: InstallDirRegKey is read by the directory
+  ; page, and makensis is 32-bit, so that read looks in WOW6432Node.
   WriteRegStr HKLM "${RUNKEY}" "InstallDir" "$INSTDIR"
+
+  ; Sreon is a 64-bit program, so its own entries belong in the 64-bit view. SetRegView is
+  ; only legal inside a Section or a Function - putting it at the top of the file is an error.
+  SetRegView 64
   WriteRegStr HKLM "${RUNKEY}" "Version" "${VERSION}"
   WriteRegStr HKLM "${UNINSTKEY}" "DisplayName" "${APPNAME}"
   WriteRegStr HKLM "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
@@ -153,6 +159,7 @@ Section "Desktop shortcut" SecDesktop
 SectionEnd
 
 Section "Add to Windows' browser list" SecBrowserList
+  SetRegView 64
   WriteRegStr HKLM "Software\Clients\StartMenuInternet\${APPNAME}" "" "${APPNAME}"
   WriteRegStr HKLM "Software\Clients\StartMenuInternet\${APPNAME}\Capabilities" "ApplicationName" "${APPNAME}"
   WriteRegStr HKLM "Software\Clients\StartMenuInternet\${APPNAME}\Capabilities" "ApplicationDescription" "Search privately. Browse freely."
@@ -173,6 +180,8 @@ SectionEnd
 
 ; ----------------------------------------------------------------- uninstall
 Section "Uninstall"
+  DeleteRegKey HKLM "${RUNKEY}"   ; the 32-bit-view upgrade hint, gone before the switch
+  SetRegView 64
   Delete "$DESKTOP\${APPNAME}.lnk"
   Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"
   Delete "$SMPROGRAMS\${APPNAME}\If Sreon cant be opened.lnk"
@@ -180,7 +189,7 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\${APPNAME}"
   DeleteRegKey HKLM "Software\Clients\StartMenuInternet\${APPNAME}"
   DeleteRegKey HKLM "${UNINSTKEY}"
-  DeleteRegKey HKLM "${RUNKEY}"
+  DeleteRegKey HKLM "${RUNKEY}"   ; 64-bit view (the 32-bit one was removed above)
   RMDir /r "$INSTDIR"
   ; Your settings live in %APPDATA%\Sreon so a reinstall can bring the vault back.
   ; They are only removed if you say so here.

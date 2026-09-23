@@ -77,11 +77,24 @@ jobs:
 
       - name: NSIS script compiles (dummy payload, Linux makensis)
         run: |
+          # Any failure is echoed as an annotation: `gh run view --log` is not always
+          # reachable, but annotations come back from the API, so a red X stays readable.
+          run_step () {
+            local name="$1"; shift
+            if ! "$@" > "/tmp/${name}.log" 2>&1; then
+              local tail
+              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              echo "::error::${name} failed: ${tail}"
+              tail -60 "/tmp/${name}.log" || true
+              exit 1
+            fi
+            cat "/tmp/${name}.log"
+          }
           sudo apt-get update
           sudo apt-get install -y nsis
           mkdir -p Browser/dist/Sreon
           printf 'MZ dummy payload for a syntax check' > Browser/dist/Sreon/Sreon.exe
-          makensis -DVERSION=0.0.0 -DOUTFILE="$RUNNER_TEMP/dummy-setup.exe" \
+          run_step makensis makensis -DVERSION=0.0.0 -DOUTFILE="$RUNNER_TEMP/dummy-setup.exe" \
             -DSOURCE_DIR="$GITHUB_WORKSPACE/Browser/dist/Sreon" \
             -DICON="$GITHUB_WORKSPACE/Browser/assets/icon.ico" \
             -DARTDIR="$GITHUB_WORKSPACE/Browser/installer/nsis" \
@@ -159,16 +172,46 @@ jobs:
       - name: Freeze Sreon and build the installers
         shell: bash
         run: |
+          # Any failure is echoed as an annotation: `gh run view --log` is not always
+          # reachable, but annotations come back from the API, so a red X stays readable.
+          run_step () {
+            local name="$1"; shift
+            if ! "$@" > "/tmp/${name}.log" 2>&1; then
+              local tail
+              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              echo "::error::${name} failed: ${tail}"
+              tail -60 "/tmp/${name}.log" || true
+              exit 1
+            fi
+            cat "/tmp/${name}.log"
+          }
           args=""
           if [ "${{ inputs.installer_app }}" = "true" ]; then args="$args --installer-app"; fi
-          python -u Browser/tools/build.py $args
+          if [ "${{ matrix.pack }}" != "macos" ]; then
+            # keep the artwork the build would have produced, but never fail on rendering
+            python Browser/tools/make_dmg_background.py --out-dir "$RUNNER_TEMP/art" || true
+          fi
+          run_step build python -u Browser/tools/build.py $args
       - name: macOS - verify the image opens, launches, and is styled
         if: matrix.pack == 'macos'
         run: |
+          # Any failure is echoed as an annotation: `gh run view --log` is not always
+          # reachable, but annotations come back from the API, so a red X stays readable.
+          run_step () {
+            local name="$1"; shift
+            if ! "$@" > "/tmp/${name}.log" 2>&1; then
+              local tail
+              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              echo "::error::${name} failed: ${tail}"
+              tail -60 "/tmp/${name}.log" || true
+              exit 1
+            fi
+            cat "/tmp/${name}.log"
+          }
           ls -lh Browser/dist
           hdiutil verify Browser/dist/Sreon.dmg
           python -m pip install dmgbuild   # brings ds_store, used to read the Finder layout
-          python Browser/tools/check_dmg.py Browser/dist/Sreon.dmg --mount
+          run_step dmgcheck python Browser/tools/check_dmg.py Browser/dist/Sreon.dmg --mount
           mount=/Volumes/Sreon-check
           hdiutil detach "$mount" -force >/dev/null 2>&1 || true
           mkdir -p "$mount"
@@ -212,6 +255,19 @@ jobs:
       - name: Linux - check the AppImage and the deb
         if: matrix.pack == 'linux'
         run: |
+          # Any failure is echoed as an annotation: `gh run view --log` is not always
+          # reachable, but annotations come back from the API, so a red X stays readable.
+          run_step () {
+            local name="$1"; shift
+            if ! "$@" > "/tmp/${name}.log" 2>&1; then
+              local tail
+              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              echo "::error::${name} failed: ${tail}"
+              tail -60 "/tmp/${name}.log" || true
+              exit 1
+            fi
+            cat "/tmp/${name}.log"
+          }
           ls -lh Browser/dist
           test -x Browser/dist/Sreon.AppImage
           head -c 8 Browser/dist/Sreon.AppImage | od -c | head -1

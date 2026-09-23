@@ -8,19 +8,21 @@
 ;            -DGUIDE=C:/repo/If-it-says-unverified.txt
 ;            -DOUTFILE=C:/w/dist/SreonSetup.exe  Sreon.nsi
 ;
-; The fallbacks below let "makensis Sreon.nsi" run by hand from this folder.
+; The fallbacks below let "makensis Sreon.nsi" run by hand from this folder
+; (relative paths are resolved by makensis against its working directory, and NSIS
+; accepts forward slashes on Windows, so nothing here uses backslashes).
 
 !ifndef VERSION
   !define VERSION "0.0.0"
 !endif
 !ifndef SOURCE_DIR
-  !define SOURCE_DIR "..\..\dist\Sreon"
+  !define SOURCE_DIR "../../dist/Sreon"
 !endif
 !ifndef ICON
-  !define ICON "..\..\assets\icon.ico"
+  !define ICON "../../assets/icon.ico"
 !endif
 !ifndef GUIDE
-  !define GUIDE "..\..\..\If-it-says-unverified.txt"
+  !define GUIDE "../../../If-it-says-unverified.txt"
 !endif
 !ifndef OUTFILE
   !define OUTFILE "SreonSetup.exe"
@@ -56,9 +58,9 @@ BrandingText " "
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "${ARTDIR}\header.bmp"
-!define MUI_HEADERIMAGE_UNBITMAP "${ARTDIR}\header.bmp"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${ARTDIR}\welcome.bmp"
+!define MUI_HEADERIMAGE_BITMAP "${ARTDIR}/header.bmp"
+!define MUI_HEADERIMAGE_UNBITMAP "${ARTDIR}/header.bmp"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${ARTDIR}/welcome.bmp"
 !define MUI_ABORTWARNING
 !define MUI_ABORTWARNING_TEXT "Sreon is not installed yet. Cancel anyway?"
 
@@ -103,7 +105,7 @@ LangString DESC_BROWSERLIST ${LANG_ENGLISH} "Offer Sreon in Settings > Apps > De
 Section "!Sreon" SecApp
   SectionIn RO
   SetOutPath "$INSTDIR"
-  File /r "${SOURCE_DIR}\*.*"
+  File /r "${SOURCE_DIR}/*.*"
   File /oname="If it says unverified.txt" "${GUIDE}"
 
   WriteRegStr HKLM "${RUNKEY}" "InstallDir" "$INSTDIR"

@@ -149,10 +149,15 @@ Section "Add to Windows' browser list" SecBrowserList
   WriteRegStr HKLM "Software\Clients\StartMenuInternet\${APPNAME}\shell\open\command" "" '"$INSTDIR\${EXE}" "%1"'
 SectionEnd
 
-!insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "$(DESC_APP)"
-!insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "$(DESC_STARTMENU)"
-!insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "$(DESC_DESKTOP)"
-!insertmacro MUI_DESCRIPTION_TEXT ${SecBrowserList} "$(DESC_BROWSERLIST)"
+; Hover text for the components page. MUI builds these into one if/elseif chain, so the
+; block has to be wrapped - a bare MUI_DESCRIPTION_TEXT expands to ${elseif} and makensis
+; aborts with "Cannot use Else without a preceding If".
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "$(DESC_APP)"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "$(DESC_STARTMENU)"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "$(DESC_DESKTOP)"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecBrowserList} "$(DESC_BROWSERLIST)"
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ; ----------------------------------------------------------------- uninstall
 Section "Uninstall"

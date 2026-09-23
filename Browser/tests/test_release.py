@@ -90,7 +90,9 @@ def test_nsis_script_is_fully_parameterised_and_branded():
     for bitmap in ("header.bmp", "welcome.bmp"):
         assert bitmap in script, f"installer art {bitmap} is referenced nowhere"
         assert (BROWSER / "installer" / "nsis" / bitmap).is_file(), f"{bitmap} was never generated"
-    assert "!insertmacro MUI_FUNCTION_DESCRIPTION" not in script  # not a real macro
+    assert script.count("!insertmacro MUI_DESCRIPTION_TEXT") == script.count(
+        "!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN") or "!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN" in script, \
+        "MUI_DESCRIPTION_TEXT emits ${elseif}: it must sit inside MUI_FUNCTION_DESCRIPTION_BEGIN/END"
 
 
 @pytest.mark.parametrize("tool", ["build.py", "make_dmg.py", "make_dmg_background.py"])

@@ -187,10 +187,6 @@ jobs:
           }
           args=""
           if [ "${{ inputs.installer_app }}" = "true" ]; then args="$args --installer-app"; fi
-          if [ "${{ matrix.pack }}" != "macos" ]; then
-            # keep the artwork the build would have produced, but never fail on rendering
-            python Browser/tools/make_dmg_background.py --out-dir "$RUNNER_TEMP/art" || true
-          fi
           run_step build python -u Browser/tools/build.py $args
       - name: macOS - verify the image opens, launches, and is styled
         if: matrix.pack == 'macos'
@@ -325,8 +321,8 @@ jobs:
   # -------------------------------------------------------------------- package
   package:
     name: Bundle the double-click files
-    needs: build
-    if: ${{ always() && !cancelled() }}
+    needs: [test, build]
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:

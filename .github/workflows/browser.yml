@@ -338,40 +338,68 @@ jobs:
           set -e
           version="$(tr -d '[:space:]' < Browser/VERSION)"
           echo "version=$version" >> "$GITHUB_ENV"
-          mkdir -p stage/double bundle
-          for pair in "macos:Sreon.dmg" "windows:SreonSetup.exe" "linux:Sreon.AppImage"; do
-            pack="${pair%%:*}"; file="${pair##*:}"
-            src="incoming/sreon-$pack/$file"
-            if [ -f "$src" ]; then
-              cp "$src" "stage/double/$file"
-              cp "$src" "bundle/$file"
-            else
-              echo "::warning::$file was not produced by the $pack build"
+          mkdir -p stage bundle
+          # Artifact folders are not spelled the same by every version of download-artifact, so
+          # the files are found by name anywhere under incoming/ rather than by a guessed path.
+          grab () {
+            file="$1"; pack="$2"
+            found="$(find incoming -type f -name "$file" -path "*$pack*" | head -1)"
+            if [ -z "$found" ]; then
+              found="$(find incoming -type f -name "$file" | head -1)"
             fi
-          done
-          # the zip stays exactly what was asked for: three double-click files, nothing else
+            if [ -n "$found" ]; then
+              cp "$found" "stage/$file"
+              chmod 0755 "stage/$file"
+              echo "staged $file ($(du -h "stage/$file" | cut -f1))"
+            else
+              echo "::error::$file is missing from the $pack artifact"
+              find incoming -type f | sed 's/^/  found: /' || true
+              return 1
+            fi
+          }
+          grab Sreon.dmg macos
+          grab SreonSetup.exe windows
+          grab Sreon.AppImage linux
           python - "$version" <<'PY'
-          import os, sys, zipfile
+          import shutil, sys, time, zipfile
           from pathlib import Path
+
           version = sys.argv[1]
-          stage, bundle = Path("stage/double"), Path("bundle")
-          target = bundle / f"Sreon-{version}-double-click.zip"
+          stage = Path("stage")
+          target = Path("bundle") / f"Sreon-{version}-double-click.zip"
           if target.exists():
               target.unlink()
+          # Exactly the three double-click files, no README, no folder, no archive of an archive.
+          # create_system/external_attr carry the +x bit so a Linux unzipper keeps the AppImage
+          # runnable and GNOME/nautilus can offer "Open with" without a terminal.
           with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
               for path in sorted(stage.iterdir()):
-                  info = archive.getinfo(path.name) or zipfile.ZipInfo(path.name)
-                  info.external_attr = (0o755 & 0xFFFF) << 16   # keep +x so the AppImage double-clicks
+                  info = zipfile.ZipInfo(path.name, date_time=time.localtime(path.stat().st_mtime)[:6])
                   info.compress_type = zipfile.ZIP_DEFLATED
-                  archive.write(path, path.name)
+                  info.create_system = 3          # unix, so the mode below is honoured
+                  info.external_attr = (0o755 & 0xFFFF) << 16
+                  with archive.open(info, "w") as dst, path.open("rb") as src:
+                      shutil.copyfileobj(src, dst, 1024 * 1024)
           print("zip", target, f"{target.stat().st_size / 1e6:.0f} MB")
+          names = []
           with zipfile.ZipFile(target) as archive:
+              if archive.testzip() is not None:
+                  raise SystemExit("the zip we just wrote is corrupt")
               for entry in archive.infolist():
                   print(" ", entry.filename, f"{entry.file_size / 1e6:.0f} MB", oct(entry.external_attr >> 16))
+                  names.append(entry.filename)
+          expected = {"Sreon.dmg", "SreonSetup.exe", "Sreon.AppImage"}
+          missing = expected - set(names)
+          if missing:
+              raise SystemExit(f"zip is missing {sorted(missing)}")
+          extra = set(names) - expected
+          if extra:
+              raise SystemExit(f"zip should hold only the three double-click files, found {sorted(extra)}")
           PY
-          cp If-it-says-unverified.txt "bundle/If-it-says-unverified.txt"
-          (cd stage && find . -type f -exec sha256sum {} \; | sed 's|\./||' > ../bundle/SHA256SUMS.txt)
+          cp If-it-says-unverified.txt bundle/If-it-says-unverified.txt
+          (cd stage && sha256sum * > ../bundle/SHA256SUMS.txt)
           ls -lh bundle
+
       - uses: actions/upload-artifact@v4
         with:
           name: Sreon-${{ env.version }}-double-click

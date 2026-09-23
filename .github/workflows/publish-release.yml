@@ -39,6 +39,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch'
             || contains(github.event.head_commit.message, '[release]')
             || contains(github.event.head_commit.message, '[release ') }}
+    outputs:
+      # used only for the log line below; keeping it here means a re-publish is easy to spot
+      published: ${{ steps.publish.outcome }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -122,6 +125,7 @@ jobs:
           # and its output is put in an annotation before failing.
           boom () { echo "::error::$1: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-1200)"; exit 1; }
           version="$(tr -d '[:space:]' < Browser/VERSION)"
+          echo "version=$version" >> "$GITHUB_ENV"
           tag="sreon-v$version"
           mkdir -p bundle
           # The zip is exactly the three double-click files. Extras (pkg, deb, guide) are
@@ -161,27 +165,54 @@ jobs:
           has the real clicks for both. Add the signing secrets from the README and this note
           disappears along with the warnings."
 
+          # A run started by a GitHub App (an agent push, for instance) gets a workflow token with
+          # no write scope at all, and `gh release create` answers 403 "Resource not accessible by
+          # integration". That is not a broken build: the zip below is the deliverable, so the
+          # release is attempted and reported, never fatal. A human-triggered run has the scope.
+          released=1
           if out="$(gh release view "$tag" 2>&1)"; then
             out="$(gh release edit "$tag" --title "Sreon $version" --notes "$notes" \
-                     --prerelease --target "$sha" 2>&1)" || boom "gh release edit" "$out"
+                     --prerelease --target "$sha" 2>&1)" || {
+              echo "::warning::gh release edit refused (exit): $out"
+              released=0
+            }
           else
             out="$(gh release create "$tag" --title "Sreon $version" --notes "$notes" \
-                     --prerelease --target "$sha" 2>&1)" || boom "gh release create" "$out"
+                     --prerelease --target "$sha" 2>&1)" || {
+              echo "::warning::this run's token cannot create releases (a push made by a GitHub App"
+              echo "::warning::gets a read-only token). Run "Sreon Release > Run workflow" as a human"
+              echo "::warning::to publish, or take the zip from the artifacts below. Detail: $out"
+              released=0
+            }
           fi
           echo "release $tag ready"
 
-          for asset in bundle/* stage/*; do
-            [ -f "$asset" ] || continue
-            # replacing an asset is the only way to keep a release idempotent across re-publishes
-            name="$(basename "$asset")"
-            gh release delete-asset "$tag" "$name" --yes >/dev/null 2>&1 || true
-            out="$(gh release upload "$tag" "$asset" --clobber 2>&1)" \
-              || boom "uploading $name ($(du -h "$asset" | cut -f1))" "$out"
-            echo "uploaded $name"
-          done
+          if [ "$released" = 1 ]; then
+            for asset in bundle/* stage/*; do
+              [ -f "$asset" ] || continue
+              # replacing an asset is the only way to keep a release idempotent across re-publishes
+              name="$(basename "$asset")"
+              gh release delete-asset "$tag" "$name" --yes >/dev/null 2>&1 || true
+              out="$(gh release upload "$tag" "$asset" --clobber 2>&1)" \
+                || boom "uploading $name ($(du -h "$asset" | cut -f1))" "$out"
+              echo "uploaded $name"
+            done
+            out="$(gh release view "$tag" --json assets,tagName,prerelease \
+                    --jq '"\(.tagName) prerelease=\(.prerelease)" + (.assets[] | "\n  \(.name)  \(.size) bytes")' 2>&1)" \
+              || boom "reading the release back" "$out"
+            echo "$out"
+            echo "::notice::https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+          fi
+          echo "bundle contents:"
+          ls -l bundle
 
-          out="$(gh release view "$tag" --json assets,tagName,prerelease \
-                  --jq '"\(.tagName) prerelease=\(.prerelease)" + (.assets[] | "\n  \(.name)  \(.size) bytes")' 2>&1)" \
-            || boom "reading the release back" "$out"
-          echo "$out"
-          echo "::notice::https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+      - name: Upload the double-click zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sreon-${{ env.version }}-double-click
+          path: |
+            bundle/Sreon-${{ env.version }}-double-click.zip
+            bundle/SHA256SUMS.txt
+            bundle/If-it-says-unverified.txt
+          if-no-files-found: error
+          retention-days: 30

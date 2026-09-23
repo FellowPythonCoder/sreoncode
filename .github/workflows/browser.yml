@@ -296,11 +296,26 @@ jobs:
             ls -lR "$target" | head -30
             exit 1
           fi
-          sleep 2
-          exe="$(find "$target" -name Sreon.exe -print -quit)"
+          # An elevated NSIS installer hands off to a second process and the stub exits 0 right
+          # away, so "it returned" means nothing: wait for the files to actually land, and accept
+          # the default location too in case /D did not survive the handoff.
+          default_dir="/c/Program Files/Sreon"
+          exe=""
+          for _ in $(seq 1 40); do
+            exe="$(find "$target" -name Sreon.exe -print -quit 2>/dev/null || true)"
+            [ -n "$exe" ] && break
+            if [ -f "$default_dir/Sreon.exe" ]; then
+              echo "::warning::the installer used $default_dir instead of /D=$target"
+              target="$default_dir"
+              exe="$default_dir/Sreon.exe"
+              break
+            fi
+            sleep 5
+          done
           if [ -z "$exe" ]; then
-            echo "::error::no Sreon.exe anywhere under $target"
-            find "$target" -maxdepth 2 | head -40
+            echo "::error::no Sreon.exe under $target after 200s of waiting"
+            ls -l "$target" 2>/dev/null | head -20
+            echo "Program Files:"; ls -l '/c/Program Files' 2>/dev/null | grep -i sreon || echo "  no Sreon folder there either"
             exit 1
           fi
           here="$(dirname "$exe")"

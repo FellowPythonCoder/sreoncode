@@ -201,21 +201,33 @@ def verify(out: Path, app_name: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("app", type=Path)
-    parser.add_argument("out", type=Path)
+    parser.add_argument("app", nargs="?", type=Path, help="path to Sreon.app")
+    parser.add_argument("out", nargs="?", type=Path, help="path for the .dmg")
     parser.add_argument("--plain", action="store_true", help="skip dmgbuild (CI smoke test)")
     parser.add_argument("--background-only", action="store_true",
                         help="just render the artwork and print the geometry")
+    parser.add_argument("--verify-only", action="store_true",
+                        help="only inspect an existing image, then exit 0 (CI)")
     args = parser.parse_args()
 
     if args.background_only:
         artwork()
-        return
+        return 0
 
-    app = args.app.resolve()
+    if args.verify_only:
+        if args.out is None:
+            parser.error("--verify-only needs the image as OUT")
+        verify(args.out.expanduser().resolve(),
+               args.app.name if args.app else "Sreon.app")
+        return 0
+
+    if args.app is None or args.out is None:
+        parser.error("APP and OUT are required unless --background-only/--verify-only")
+
+    app = args.app.expanduser().resolve()
     if not app.is_dir():
         raise SystemExit(f"no app bundle at {app}")
-    out = args.out.resolve()
+    out = args.out.expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
     prepare_app(app)
@@ -223,8 +235,11 @@ def main():
     if not styled:
         build_plain(app, out)
     summary = verify(out, app.name)
-    log("wrote", out, f"{out.stat().st_size / 1e6:.0f} MB", "styled" if styled else "plain", "|", summary)
-    print(f"::notice::Sreon.dmg {'uses the styled layout' if styled else 'fell back to a plain image'} · {summary}")
+    log("wrote", out, f"{out.stat().st_size / 1e6:.0f} MB", "styled" if styled else "plain",
+        "|", summary)
+    # CI must not go red because of a warning nobody can act on - the warning is the
+    # point, and the image still opens.
+    print(f"::notice::Sreon.dmg {'uses the styled layout' if styled else 'fell back to a plain image'} \u00b7 {summary}")
     return 0
 
 

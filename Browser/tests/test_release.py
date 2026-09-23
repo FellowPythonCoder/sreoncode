@@ -83,8 +83,14 @@ def test_help_dialog_matches_the_guide():
 
 def test_nsis_script_is_fully_parameterised_and_branded():
     script = (BROWSER / "installer" / "nsis" / "Sreon.nsi").read_text(encoding="utf-8")
-    for define in ("VERSION", "SOURCE_DIR", "ICON", "GUIDE", "OUTFILE", "ARTDIR"):
+    for define in ("VERSION", "SOURCE_DIR", "SOURCE_GLOB", "ICON", "GUIDE", "OUTFILE",
+                   "HEADER_BMP", "WELCOME_BMP"):
         assert f"!ifndef {define}" in script, f"{define} must have a fallback, not a hardcoded value"
+    # makensis resolves "File" through its own path search, so the caller passes whole native
+    # paths (backslashes on Windows); the script must never join with a guessed separator.
+    assert "${ARTDIR}" not in script, "ARTDIR is gone: build.py passes HEADER_BMP/WELCOME_BMP"
+    assert 'File /r "${SOURCE_GLOB}"' in script, "the payload must come from a caller-built glob"
+    assert 'resources=(' not in script
     assert "RequestExecutionLevel admin" in script
     assert "Uninstall" in script and "GetSize" in script
     for bitmap in ("header.bmp", "welcome.bmp"):
@@ -93,6 +99,64 @@ def test_nsis_script_is_fully_parameterised_and_branded():
     assert script.count("!insertmacro MUI_DESCRIPTION_TEXT") == script.count(
         "!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN") or "!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN" in script, \
         "MUI_DESCRIPTION_TEXT emits ${elseif}: it must sit inside MUI_FUNCTION_DESCRIPTION_BEGIN/END"
+
+
+def test_version_file_only_uses_kwargs_pyparser_still_accepts(tmp_path):
+    """PyInstaller 6 dropped FixedFileInfo's `resources` field.
+
+    --version-file is eval()'d, so a single unknown keyword turns the whole freeze into
+    "Failed to deserialize VSVersionInfo from text-based representation!" - on Windows only,
+    which is where the file is used. The allowed names below are FixedFileInfo.__init__'s.
+    """
+    build = (BROWSER / "tools" / "build.py").read_text(encoding="utf-8")
+    call = build[build.index("FixedFileInfo("):build.index("kids=[")]
+    allowed = {"filevers", "prodvers", "mask", "flags", "OS", "fileType", "subtype", "date"}
+    used = set(re.findall(r"\b([A-Za-z_]+)\s*=", call))
+    assert used, "no keyword arguments found - did the generator change shape?"
+    assert not used - allowed, f"FixedFileInfo does not accept {sorted(used - allowed)}"
+    assert "date=(0, 0)" in call, "FixedFileInfo wants date=(0, 0), not the retired resources="
+
+
+def test_nsis_defines_are_native_paths_not_posix_strings():
+    """build.py must hand makensis host-native paths (str(path)), never as_posix()."""
+    build = (BROWSER / "tools" / "build.py").read_text(encoding="utf-8")
+    start = build.index("    def nsis(self)")
+    body = build[start:build.index("    def appimage(self)")]
+    assert "as_posix()" not in body, (
+        "as_posix() gives makensis forward slashes; NSIS' File path search wants the host "
+        "separator, which is how the Windows installer build broke on the wizard bitmap")
+    for flag in ("-DSOURCE_GLOB=", "-DHEADER_BMP=", "-DWELCOME_BMP=", "-DOUTFILE="):
+        assert flag in body, f"the NSIS contract is missing {flag}"
+
+
+def test_double_click_zip_holds_exactly_the_three_installers(tmp_path):
+    import make_double_click_zip as module
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    for name in module.EXPECTED:
+        (stage / name).write_bytes(b"x" * 4096)
+    target = tmp_path / "out" / "Sreon-0.0.0-double-click.zip"
+    summary = module.pack(stage, target)
+    assert summary["missing"] == []
+    import zipfile
+    with zipfile.ZipFile(target) as archive:
+        names = sorted(info.filename for info in archive.infolist())
+        modes = {info.filename: info.external_attr >> 16 for info in archive.infolist()}
+    assert names == sorted(module.EXPECTED)
+    assert all(mode == 0o755 for mode in modes.values()), modes
+    # +x surviving the round trip is the whole point: an AppImage nobody can run after
+    # unzipping is exactly the failure this zip exists to avoid.
+
+
+def test_double_click_zip_refuses_a_partial_set(tmp_path):
+    import make_double_click_zip as module
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "Sreon.dmg").write_bytes(b"x" * 128)
+    with pytest.raises(SystemExit, match="SreonSetup.exe"):
+        module.pack(stage, tmp_path / "out.zip")
+    summary = module.pack(stage, tmp_path / "out.zip", allow_missing=True)
+    assert summary["missing"] == ["SreonSetup.exe", "Sreon.AppImage"]
 
 
 @pytest.mark.parametrize("tool", ["build.py", "make_dmg.py", "make_dmg_background.py"])

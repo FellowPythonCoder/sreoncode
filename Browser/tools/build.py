@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -80,8 +81,17 @@ class Builder:
         tail = text.strip().splitlines()[-40:]
         print("\n".join(tail)[-3000:], flush=True)
         if process.returncode:
-            snippet = text[-2500:].replace("\r", " ").replace("%", "/")
-            print(f"::error::{snippet[:3900]}", flush=True)
+            # A freeze or an installer tool can bury its reason 300 lines above the tail, so
+            # surface every error-looking line too. CI annotations are the only log we always
+            # get back, so they have to be enough on their own.
+            lines = [line for line in text.splitlines() if line.strip()]
+            noisy = [line for line in lines
+                     if re.search(r"\b(error|errors|failed|failure|traceback|exception|"
+                                  r"abort\w*|no such|not found|cannot|denied)\b", line, re.I)]
+            for line in (noisy or lines)[-15:]:
+                print("  >", line.strip()[:300], flush=True)
+            snippet = " | ".join((noisy or lines)[-10:]).replace("\r", " ").replace("%", "/")
+            print(f"::error::{snippet[:3800]}", flush=True)
             if check:
                 raise SystemExit(f"step failed ({process.returncode}): {printable}")
         return process.returncode, text
@@ -133,7 +143,7 @@ class Builder:
         body = ("# UTF-8\n"
                 "VSVersionInfo(\n"
                 "  ffi=FixedFileInfo(filevers=(" + numeric + "), prodvers=(" + numeric + "),\n"
-                "    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, resources=(0, 0)),\n"
+                "    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),\n"
                 "  kids=[\n"
                 "    StringFileInfo([\n"
                 "      StringTable(u\"040904b0\", [\n"
@@ -182,7 +192,31 @@ class Builder:
             command += ["--version-file", str(self.version_file())]
         command += list(extra) + [str(entry)]
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        self.run(command)
+        code, _ = self.run(command, check=False)
+        if code:
+            # On Windows both --icon and --version-file are applied by rcedit, and rcedit is
+            # the one step that fails for reasons the machine controls (antivirus holding the
+            # .exe, a resource it dislikes). Losing an EXE icon is cosmetic; losing the whole
+            # build is not, so retry without the resource edits and say so out loud.
+            droppable = {"--version-file", "--icon"}
+            stripped = []
+            skip = False
+            for part in command:
+                if skip:
+                    skip = False
+                    continue
+                if part in droppable:
+                    skip = True
+                    continue
+                stripped.append(part)
+            if len(stripped) < len(command):
+                print("::warning::freeze failed with --icon/--version-file; retrying without "
+                      "the rcedit resource edits (exe icon and file properties will be default)",
+                      flush=True)
+                code, _ = self.run(stripped)
+                self.note("built without exe icon/version info - rcedit rejected them on this machine")
+            elif code:
+                raise SystemExit(f"PyInstaller failed ({code})")
 
     def app(self):
         guide = REPO / "If-it-says-unverified.txt"
@@ -314,11 +348,30 @@ class Builder:
         missing = [name for name in ("header.bmp", "welcome.bmp") if not (art / name).is_file()]
         if missing:
             self.run([sys.executable, str(TOOLS / "make_dmg_background.py"), "--nsis-assets"], check=False)
-        self.run([makensis, f"-DVERSION={self.version}", f"-DSOURCE_DIR={source.as_posix()}",
-                  f"-DICON={(ROOT / 'assets' / 'icon.ico').as_posix()}",
-                  f"-DARTDIR={art.as_posix()}",
-                  f"-DGUIDE={(ROOT.parent / 'If-it-says-unverified.txt').as_posix()}",
-                  f"-DOUTFILE={out.as_posix()}", str(nsi)])
+        def native(path: Path) -> str:
+            # makensis runs on the build host, so hand it the host separator. Most commands
+            # accept either, but MUI adds the wizard bitmaps with "File", and that goes through
+            # NSIS' own path search - the one place a guessed separator really does fail.
+            return str(Path(path))
+
+        defines = [
+            f"-DVERSION={self.version}",
+            f"-DSOURCE_DIR={native(source)}",
+            # the payload glob is part of the contract; the script never guesses a separator
+            f"-DSOURCE_GLOB={native(source)}{os.sep}*.*",
+            f"-DICON={native(ROOT / 'assets' / 'icon.ico')}",
+            f"-DHEADER_BMP={native(art / 'header.bmp')}",
+            f"-DWELCOME_BMP={native(art / 'welcome.bmp')}",
+            f"-DGUIDE={native(REPO / 'If-it-says-unverified.txt')}",
+            f"-DOUTFILE={native(out)}",
+        ]
+        code, output = self.run([makensis, *defines, str(nsi)], check=False)
+        if code:
+            # NSIS puts the useful line above its "Error in macro" trace and the build log is
+            # not always reachable, so quote the whole run: makensis output is ~30 lines.
+            snippet = output.strip().replace("%", "/")[-3600:]
+            print(f"::error::makensis failed ({code}) for {nsi.name}: {snippet}", flush=True)
+            raise SystemExit(f"makensis exited with {code}")
         if not self.record(out, "exe installer"):
             raise SystemExit("NSIS produced no installer")
 

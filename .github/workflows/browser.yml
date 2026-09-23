@@ -82,10 +82,15 @@ jobs:
           run_step () {
             local name="$1"; shift
             if ! "$@" > "/tmp/${name}.log" 2>&1; then
-              local tail
-              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
-              echo "::error::${name} failed: ${tail}"
-              tail -60 "/tmp/${name}.log" || true
+              # The raw log stream is not always reachable, so the annotation has to carry
+              # the answer: every error-ish line, then the tail. Truncating to one short tail
+              # is how a real failure hides behind "Process completed with exit code 1".
+              local keys tail
+              keys="$(grep -aiE '(^|[^a-z])(error|failed|traceback|exception|abort|no such|cannot|not found|denied)[^a-z]' "/tmp/${name}.log" | tail -30 | cut -c1-300 | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              tail="$(tail -c 6000 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              [ -n "$keys" ] && echo "::error::${name} - error lines: ${keys:0:6000}"
+              echo "::error::${name} - tail: ${tail:0:6000}"
+              tail -100 "/tmp/${name}.log" || true
               exit 1
             fi
             cat "/tmp/${name}.log"
@@ -94,10 +99,16 @@ jobs:
           sudo apt-get install -y nsis
           mkdir -p Browser/dist/Sreon
           printf 'MZ dummy payload for a syntax check' > Browser/dist/Sreon/Sreon.exe
+          # Same defines tools/build.py passes on Windows, so a script that compiles here
+          # compiles there. SOURCE_GLOB/HEADER_BMP/WELCOME_BMP exist because NSIS resolves
+          # "File" through its own path search, which is where a wrong separator bites.
+          nsisdir="$GITHUB_WORKSPACE/Browser/installer/nsis"
           run_step makensis makensis -DVERSION=0.0.0 -DOUTFILE="$RUNNER_TEMP/dummy-setup.exe" \
             -DSOURCE_DIR="$GITHUB_WORKSPACE/Browser/dist/Sreon" \
+            -DSOURCE_GLOB="$GITHUB_WORKSPACE/Browser/dist/Sreon/*.*" \
             -DICON="$GITHUB_WORKSPACE/Browser/assets/icon.ico" \
-            -DARTDIR="$GITHUB_WORKSPACE/Browser/installer/nsis" \
+            -DHEADER_BMP="$nsisdir/header.bmp" \
+            -DWELCOME_BMP="$nsisdir/welcome.bmp" \
             -DGUIDE="$GITHUB_WORKSPACE/If-it-says-unverified.txt" \
             Browser/installer/nsis/Sreon.nsi
           ls -lh "$RUNNER_TEMP/dummy-setup.exe"
@@ -203,10 +214,15 @@ jobs:
           run_step () {
             local name="$1"; shift
             if ! "$@" > "/tmp/${name}.log" 2>&1; then
-              local tail
-              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
-              echo "::error::${name} failed: ${tail}"
-              tail -60 "/tmp/${name}.log" || true
+              # The raw log stream is not always reachable, so the annotation has to carry
+              # the answer: every error-ish line, then the tail. Truncating to one short tail
+              # is how a real failure hides behind "Process completed with exit code 1".
+              local keys tail
+              keys="$(grep -aiE '(^|[^a-z])(error|failed|traceback|exception|abort|no such|cannot|not found|denied)[^a-z]' "/tmp/${name}.log" | tail -30 | cut -c1-300 | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              tail="$(tail -c 6000 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              [ -n "$keys" ] && echo "::error::${name} - error lines: ${keys:0:6000}"
+              echo "::error::${name} - tail: ${tail:0:6000}"
+              tail -100 "/tmp/${name}.log" || true
               exit 1
             fi
             cat "/tmp/${name}.log"
@@ -222,10 +238,15 @@ jobs:
           run_step () {
             local name="$1"; shift
             if ! "$@" > "/tmp/${name}.log" 2>&1; then
-              local tail
-              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
-              echo "::error::${name} failed: ${tail}"
-              tail -60 "/tmp/${name}.log" || true
+              # The raw log stream is not always reachable, so the annotation has to carry
+              # the answer: every error-ish line, then the tail. Truncating to one short tail
+              # is how a real failure hides behind "Process completed with exit code 1".
+              local keys tail
+              keys="$(grep -aiE '(^|[^a-z])(error|failed|traceback|exception|abort|no such|cannot|not found|denied)[^a-z]' "/tmp/${name}.log" | tail -30 | cut -c1-300 | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              tail="$(tail -c 6000 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              [ -n "$keys" ] && echo "::error::${name} - error lines: ${keys:0:6000}"
+              echo "::error::${name} - tail: ${tail:0:6000}"
+              tail -100 "/tmp/${name}.log" || true
               exit 1
             fi
             cat "/tmp/${name}.log"
@@ -259,10 +280,15 @@ jobs:
           run_step () {
             local name="$1"; shift
             if ! "$@" > "/tmp/${name}.log" 2>&1; then
-              local tail
-              tail="$(tail -c 1100 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
-              echo "::error::${name} failed: ${tail}"
-              tail -60 "/tmp/${name}.log" || true
+              # The raw log stream is not always reachable, so the annotation has to carry
+              # the answer: every error-ish line, then the tail. Truncating to one short tail
+              # is how a real failure hides behind "Process completed with exit code 1".
+              local keys tail
+              keys="$(grep -aiE '(^|[^a-z])(error|failed|traceback|exception|abort|no such|cannot|not found|denied)[^a-z]' "/tmp/${name}.log" | tail -30 | cut -c1-300 | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              tail="$(tail -c 6000 "/tmp/${name}.log" | tr '\n' '|' | tr '\r' ' ' | tr '%' '/')"
+              [ -n "$keys" ] && echo "::error::${name} - error lines: ${keys:0:6000}"
+              echo "::error::${name} - tail: ${tail:0:6000}"
+              tail -100 "/tmp/${name}.log" || true
               exit 1
             fi
             cat "/tmp/${name}.log"
@@ -354,50 +380,17 @@ jobs:
             else
               echo "::error::$file is missing from the $pack artifact"
               find incoming -type f | sed 's/^/  found: /' || true
-              return 1
+              exit 1
             fi
           }
           grab Sreon.dmg macos
           grab SreonSetup.exe windows
           grab Sreon.AppImage linux
-          python - "$version" <<'PY'
-          import shutil, sys, time, zipfile
-          from pathlib import Path
-
-          version = sys.argv[1]
-          stage = Path("stage")
-          target = Path("bundle") / f"Sreon-{version}-double-click.zip"
-          if target.exists():
-              target.unlink()
-          # Exactly the three double-click files, no README, no folder, no archive of an archive.
-          # create_system/external_attr carry the +x bit so a Linux unzipper keeps the AppImage
-          # runnable and GNOME/nautilus can offer "Open with" without a terminal.
-          with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-              for path in sorted(stage.iterdir()):
-                  info = zipfile.ZipInfo(path.name, date_time=time.localtime(path.stat().st_mtime)[:6])
-                  info.compress_type = zipfile.ZIP_DEFLATED
-                  info.create_system = 3          # unix, so the mode below is honoured
-                  info.external_attr = (0o755 & 0xFFFF) << 16
-                  with archive.open(info, "w") as dst, path.open("rb") as src:
-                      shutil.copyfileobj(src, dst, 1024 * 1024)
-          print("zip", target, f"{target.stat().st_size / 1e6:.0f} MB")
-          names = []
-          with zipfile.ZipFile(target) as archive:
-              if archive.testzip() is not None:
-                  raise SystemExit("the zip we just wrote is corrupt")
-              for entry in archive.infolist():
-                  print(" ", entry.filename, f"{entry.file_size / 1e6:.0f} MB", oct(entry.external_attr >> 16))
-                  names.append(entry.filename)
-          expected = {"Sreon.dmg", "SreonSetup.exe", "Sreon.AppImage"}
-          missing = expected - set(names)
-          if missing:
-              raise SystemExit(f"zip is missing {sorted(missing)}")
-          extra = set(names) - expected
-          if extra:
-              raise SystemExit(f"zip should hold only the three double-click files, found {sorted(extra)}")
-          PY
+          # Same script the release workflow uses, so the zip in CI and the zip on the release
+          # cannot drift apart: exactly these three files, +x preserved, verified after writing.
+          python3 Browser/tools/make_double_click_zip.py --stage stage --sums bundle/SHA256SUMS.txt \
+            --out "bundle/Sreon-$version-double-click.zip"
           cp If-it-says-unverified.txt bundle/If-it-says-unverified.txt
-          (cd stage && sha256sum * > ../bundle/SHA256SUMS.txt)
           ls -lh bundle
 
       - uses: actions/upload-artifact@v4

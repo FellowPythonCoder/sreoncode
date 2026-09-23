@@ -1,0 +1,141 @@
+name: Sreon Release
+
+# Publish the installers a build already produced, without rebuilding anything.
+#
+# Browser.yml writes the artifacts; this workflow collects them into the deliverable zip and
+# attaches everything to a GitHub release:
+#
+#   git commit -m "[release 35805034304] publish these installers"   # one specific run
+#   git commit -m "[release] publish the newest green build"         # newest green run here
+#
+# Re-downloading finished artifacts instead of re-running the matrix matters because the frozen
+# app is ~600 MB of PyInstaller output; a rebuild costs 15 minutes and can drift from what CI
+# already verified.
+
+on:
+  push:
+    paths:
+      - ".github/workflows/publish-release.yml"
+      - "Browser/**"
+      - "README.md"
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run number to publish (blank = newest green run on this branch)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: sreon-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish the double-click zip
+    if: ${{ github.event_name == 'workflow_dispatch'
+            || contains(github.event.head_commit.message, '[release]')
+            || contains(github.event.head_commit.message, '[release ') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the run to publish
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          id="$(git log -1 --pretty=%B | grep -oE '\[release [0-9]+\]' | grep -oE '[0-9]+' | head -1 || true)"
+          [ -z "$id" ] && id="${{ inputs.run_id }}"
+          if [ -z "$id" ]; then
+            id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/browser.yml/runs?per_page=30" \
+                   --jq ".workflow_runs[] | select(.head_branch==\"$GITHUB_REF_NAME\" and .conclusion==\"success\") | .id" \
+                   | head -1 || true)"
+          fi
+          if [ -z "$id" ]; then
+            echo "::error::no successful browser.yml run found on $GITHUB_REF_NAME - build it first, or name one with [release <run id>]"
+            exit 1
+          fi
+          gh run view "$id" --json name,status,conclusion,headSha,htmlUrl \
+            --jq '"publishing: \(.name) \(.status)/\(.conclusion) at \(.headSha[0:7]) - \(.htmlUrl)"'
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Collect the artifacts of that run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          rm -rf incoming stage && mkdir -p incoming stage
+          for pack in macos windows linux; do
+            if ! gh run download "${{ steps.pick.outputs.id }}" -n "sreon-$pack" -D "incoming/$pack"; then
+              echo "::warning::run ${{ steps.pick.outputs.id }} has no sreon-$pack artifact"
+            fi
+          done
+          # upload-artifact keeps whatever folder shape the build used, so files are matched by
+          # name rather than by a guessed path, and stage/ ends up flat.
+          for file in Sreon.dmg Sreon.pkg SreonSetup.exe Sreon.AppImage; do
+            found="$(find incoming -type f -name "$file" | head -1 || true)"
+            if [ -n "$found" ]; then
+              cp "$found" "stage/$file"
+              chmod 0755 "stage/$file"
+              echo "  $(printf '%-16s' "$file") $(du -h "stage/$file" | cut -f1)"
+            else
+              echo "::warning::$file is not in that run"
+            fi
+          done
+          deb="$(find incoming -type f -name 'sreon_*.deb' | head -1 || true)"
+          [ -n "$deb" ] && cp "$deb" "stage/$(basename "$deb")" && echo "  $(basename "$deb") $(du -h "stage/$deb" | cut -f1)"
+          echo "staged:"; ls -l stage
+
+      - name: Build the zip and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          version="$(tr -d '[:space:]' < Browser/VERSION)"
+          tag="sreon-v$version"
+          mkdir -p bundle
+          # The zip is exactly the three double-click files. Extras (pkg, deb, guide) are
+          # separate assets, so nobody has to unzip 600 MB to get one installer.
+          python3 Browser/tools/make_double_click_zip.py \
+            --stage stage --out "bundle/Sreon-$version-double-click.zip" \
+            --sums "bundle/SHA256SUMS.txt" --allow-missing
+          cp If-it-says-unverified.txt bundle/If-it-says-unverified.txt
+          notes="Sreon $version - the desktop browser, ready to double-click.
+
+          **Sreon-$version-double-click.zip** holds exactly three files:
+
+          - \`Sreon.dmg\` - macOS (Apple silicon). Drag Sreon onto Applications; the window itself shows what to click if Gatekeeper objects.
+          - \`SreonSetup.exe\` - Windows. Branded NSIS installer, adds Sreon to the Start Menu.
+          - \`Sreon.AppImage\` - Linux. Executable inside the zip, so extract and double-click.
+
+          Other assets are the same installers individually: \`Sreon.pkg\` for macOS (installs
+          for you, no dragging) and \`sreon_${version}_amd64.deb\` for Debian/Ubuntu.
+          \`SHA256SUMS.txt\` covers the three files in the zip.
+
+          These are unsigned builds: no Apple Developer ID, no Authenticode certificate. macOS
+          shows its one-time 'cannot be opened' warning and Windows SmartScreen says the app
+          isn't commonly signed - \`If-it-says-unverified.txt\` has the real clicks for both.
+          Add the signing secrets from the README and this note disappears along with the warnings."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "Sreon $version" --notes "$notes" \
+              --prerelease --target "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ steps.pick.outputs.id }}" --jq .head_sha)"
+          else
+            gh release create "$tag" --title "Sreon $version" --notes "$notes" --prerelease \
+              --target "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${{ steps.pick.outputs.id }}" --jq .head_sha)"
+          fi
+          for asset in bundle/* stage/*; do
+            [ -f "$asset" ] || continue
+            # replacing an asset is the only way to keep a release idempotent across re-publishes
+            gh release delete-asset "$tag" "$(basename "$asset")" --yes >/dev/null 2>&1 || true
+            gh release upload "$tag" "$asset"
+          done
+          echo "release assets:"
+          gh release view "$tag" --json assets,tagName,prerelease \
+            --jq '"\(.tagName) prerelease=\(.prerelease)" + (.assets[] | "\n  \(.name)  \(.size) bytes")'
+          echo "::notice::https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"

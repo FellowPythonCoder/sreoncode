@@ -3,14 +3,18 @@
 ; tools/build.py compiles this with absolute paths, so nothing depends on the
 ; working directory makensis happens to run from:
 ;
-;   makensis -DVERSION=0.5.1      -DSOURCE_DIR=C:/w/dist/Sreon
-;            -DICON=C:/w/assets/icon.ico     -DARTDIR=C:/w/installer/nsis
-;            -DGUIDE=C:/repo/If-it-says-unverified.txt
-;            -DOUTFILE=C:/w/dist/SreonSetup.exe  Sreon.nsi
+;   makensis -DVERSION=0.5.1
+;            -DSOURCE_DIR=C:\w\dist\Sreon   -DSOURCE_GLOB=C:\w\dist\Sreon\*.*
+;            -DICON=C:\w\assets\icon.ico
+;            -DHEADER_BMP=C:\w\nsis\header.bmp  -DWELCOME_BMP=C:\w\nsis\welcome.bmp
+;            -DGUIDE=C:\repo\If-it-says-unverified.txt
+;            -DOUTFILE=C:\w\dist\SreonSetup.exe  Sreon.nsi
 ;
-; The fallbacks below let "makensis Sreon.nsi" run by hand from this folder
-; (relative paths are resolved by makensis against its working directory, and NSIS
-; accepts forward slashes on Windows, so nothing here uses backslashes).
+; The fallbacks below let "makensis Sreon.nsi" run by hand from this folder: a bare
+; filename is resolved against the folder of the script being compiled, which behaves the
+; same on every platform. tools/build.py passes absolute HEADER_BMP/WELCOME_BMP/SOURCE_GLOB
+; written with the host separator, because MUI adds the wizard bitmaps with "File" and that
+; goes through NSIS' own path search - the one place a separator guess actually breaks.
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -24,11 +28,19 @@
 !ifndef GUIDE
   !define GUIDE "../../../If-it-says-unverified.txt"
 !endif
+; The payload glob comes from the caller so this script never has to guess a path separator.
+!ifndef SOURCE_GLOB
+  !define SOURCE_GLOB "${SOURCE_DIR}/*.*"
+!endif
 !ifndef OUTFILE
   !define OUTFILE "SreonSetup.exe"
 !endif
-!ifndef ARTDIR
-  !define ARTDIR "."
+; Artwork: absolute paths from the build, otherwise next to this script.
+!ifndef HEADER_BMP
+  !define HEADER_BMP "header.bmp"
+!endif
+!ifndef WELCOME_BMP
+  !define WELCOME_BMP "welcome.bmp"
 !endif
 
 !define APPNAME "Sreon"
@@ -58,9 +70,9 @@ BrandingText " "
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "${ARTDIR}/header.bmp"
-!define MUI_HEADERIMAGE_UNBITMAP "${ARTDIR}/header.bmp"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${ARTDIR}/welcome.bmp"
+!define MUI_HEADERIMAGE_BITMAP "${HEADER_BMP}"
+!define MUI_HEADERIMAGE_UNBITMAP "${HEADER_BMP}"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${WELCOME_BMP}"
 !define MUI_ABORTWARNING
 !define MUI_ABORTWARNING_TEXT "Sreon is not installed yet. Cancel anyway?"
 
@@ -105,7 +117,7 @@ LangString DESC_BROWSERLIST ${LANG_ENGLISH} "Offer Sreon in Settings > Apps > De
 Section "!Sreon" SecApp
   SectionIn RO
   SetOutPath "$INSTDIR"
-  File /r "${SOURCE_DIR}/*.*"
+  File /r "${SOURCE_GLOB}"
   ; NSIS /oname takes a single unquoted token, so the guide keeps its hyphenated name.
   File /oname=If-it-says-unverified.txt "${GUIDE}"
 

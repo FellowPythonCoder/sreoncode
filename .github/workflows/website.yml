@@ -1,0 +1,39 @@
+name: Check website and hidden area
+on:
+  workflow_dispatch:
+  push:
+    branches: [arena/01a0bffb-sreon-browser]
+    paths:
+      - index.html
+      - site/**
+      - Extra/Source/integrations/sreon.mjs
+      - Extra/Source/src-tauri/**
+      - .github/workflows/website.yml
+permissions:
+  contents: read
+jobs:
+  website:
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Extra/Source/package-lock.json
+      - run: npm ci --prefix Extra/Source
+      - run: node --test site/tests/*.test.mjs
+      - run: |
+          cd Extra/Source
+          npx playwright install chromium
+      - run: Extra/Source/node_modules/.bin/playwright test --config site/playwright.config.mjs
+      - run: rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Extra/Source/src-tauri -> target
+      - run: cargo build --manifest-path Extra/Source/src-tauri/Cargo.toml --no-default-features --features api --bin sreon-api
+      - name: Check automatic startup and actual engine through website API
+        run: node site/tests/live-api.mjs
+        env:
+          SREON_API: Extra/Source/src-tauri/target/debug/sreon-api

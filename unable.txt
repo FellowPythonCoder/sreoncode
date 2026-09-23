@@ -1,0 +1,37 @@
+Sreon Browser — things that are not in the app, and why
+
+VPN
+There is no legitimate VPN provider, tunnel, or kill switch in this project. A “connected” state without actually routing traffic would be fake, so VPN is not in the interface at all.
+
+Ad blocker / tracker blocker
+List-based blockers routinely break everyday sites, including YouTube. This browser does not intercept or block page requests. Sites load the same way Chromium would load them. Third-party cookies can be limited in Settings; that is not an ad blocker.
+
+AI
+Omitted from the desktop browser. The website still has its optional bring-your-own-key chat. The browser does not call any AI service and does not invent answers.
+
+Games
+Omitted from the desktop browser. Games stay on the website only.
+
+Telemetry / account / sync
+Sreon does not create an account, does not sync to a Sreon server, and does not send usage, crash, or browsing reports to Sreon. Websites you visit and the search engine you query still see ordinary network requests.
+
+OS biometric unlock (Face ID, Windows Hello, Touch ID)
+Not wired. The lock is a real PIN that encrypts the password vault. Wrong PIN does not reveal passwords. Biometrics are not claimed.
+
+Code-signed / notarized installers
+No Apple or Microsoft signing certificate is available here. Windows SmartScreen and macOS Gatekeeper may warn. That is the OS doing its job.
+
+Widevine / DRM streaming
+Qt WebEngine does not ship Netflix-style DRM. Ordinary HTML5 video and audio work when the site and platform codecs allow it.
+
+Browser extension store
+Not included. Extensions would be a large extra attack surface.
+
+Tor / “anonymous mode”
+Private windows isolate and discard a profile. They are not anonymity. IP address, network operator, and sites still see the visit.
+
+Live-updating filter lists, parental controls, enterprise policy, password breach checks, credit-card autofill, cloud tabs
+Not built. They need extra services or would bloat the app.
+
+What this browser does instead
+Real Chromium tabs via Qt WebEngine, back/forward/reload/stop, downloads, cookies and local site storage, private windows, persistent settings, bookmarks, history, reading list, encrypted passwords behind a PIN, and keyword-vs-URL omnibox search through the existing Sreon Rust engine. No Sreon telemetry. No fake security features.

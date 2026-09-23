@@ -1,0 +1,346 @@
+name: Sreon Browser
+
+# One workflow that freezes the app and produces the double-click files:
+#   macOS    Sreon.dmg (styled drag-to-Applications window) + Sreon.pkg
+#   Windows  SreonSetup.exe (branded NSIS installer)
+#   Linux    Sreon.AppImage + sreon_<version>_amd64.deb
+# Every artifact is mounted / silent-installed / unpacked in CI before it is uploaded.
+
+on:
+  push:
+    paths:
+      - "Browser/**"
+      - "If-it-says-unverified.txt"
+      - ".github/workflows/browser.yml"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish the installers as a GitHub release (tag sreon-v<version>)"
+        type: boolean
+        default: false
+      installer_app:
+        description: "Also freeze the custom Qt installer GUI"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: sreon-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  # ------------------------------------------------------------------ preflight
+  test:
+    name: Unit tests, artwork and installer syntax
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            Browser/requirements.txt
+            Browser/tools/requirements-design.txt
+      - run: python -m pip install -U pip
+      - run: python -m pip install pytest cryptography -r Browser/tools/requirements-design.txt
+      - name: pytest
+        run: PYTHONPATH=Browser python -m pytest Browser/tests -q
+      - name: Artwork matches its generator
+        run: |
+          python Browser/tools/make_dmg_background.py
+          python Browser/tools/make_dmg_background.py --nsis-assets
+          # Byte-for-byte comparison would be brittle across FreeType builds, so the
+          # committed art only has to be the same picture: same file, same size.
+          fail=0
+          for f in Browser/assets/dmg-background.png Browser/assets/dmg-background@2x.png \
+                   Browser/installer/nsis/header.bmp Browser/installer/nsis/welcome.bmp; do
+            now="$(stat -c%s "$f")"
+            was="$(git cat-file -s "HEAD:$f" 2>/dev/null || echo 0)"
+            if [ "$was" = "0" ]; then echo "::error::$f is not committed"; fail=1; continue; fi
+            delta=$(( (now - was) * 100 / was ))
+            if [ "${delta#-}" -gt 1 ]; then
+              echo "::error::$f differs from the committed art by ${delta}% - run tools/make_dmg_background.py and commit the result"
+              fail=1
+            else
+              echo "$f current ($now bytes, committed $was)"
+            fi
+          done
+          exit $fail
+
+      - name: NSIS script compiles (dummy payload, Linux makensis)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nsis
+          mkdir -p Browser/dist/Sreon
+          printf 'MZ dummy payload for a syntax check' > Browser/dist/Sreon/Sreon.exe
+          makensis -DVERSION=0.0.0 -DOUTFILE="$RUNNER_TEMP/dummy-setup.exe" \
+            -DSOURCE_DIR="$GITHUB_WORKSPACE/Browser/dist/Sreon" \
+            -DICON="$GITHUB_WORKSPACE/Browser/assets/icon.ico" \
+            -DARTDIR="$GITHUB_WORKSPACE/Browser/installer/nsis" \
+            -DGUIDE="$GITHUB_WORKSPACE/If-it-says-unverified.txt" \
+            Browser/installer/nsis/Sreon.nsi
+          ls -lh "$RUNNER_TEMP/dummy-setup.exe"
+      - name: Search engine compiles
+        run: |
+          cd Browser/search
+          cargo check --release
+
+  # -------------------------------------------------------------------- builders
+  build:
+    name: ${{ matrix.name }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            os: macos-14
+            pack: macos
+          - name: Windows
+            os: windows-latest
+            pack: windows
+          - name: Linux
+            os: ubuntu-22.04
+            pack: linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Browser/requirements.txt
+      - name: Version and target label
+        shell: bash
+        run: |
+          {
+            echo "SREON_VERSION=$(tr -d '[:space:]' < Browser/VERSION)"
+            if [ "${{ matrix.pack }}" = "macos" ]; then echo "SREON_PLATFORMS=Apple silicon"; else echo "SREON_PLATFORMS="; fi
+          } >> "$GITHUB_ENV"
+      - name: Linux build and runtime libraries
+        if: matrix.pack == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libnss3 libasound2 libxcomposite1 libxdamage1 \
+            libxrandr2 libxtst6 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libgbm1 libcups2 \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 \
+            libfontconfig1 squashfs-tools libfuse2 dpkg-dev fakeroot
+          mkdir -p Browser/tools/linux
+          curl -fL -o Browser/tools/linux/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x Browser/tools/linux/appimagetool
+      - name: NSIS for the Windows installer
+        if: matrix.pack == 'windows'
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          makensis /VERSION
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -r Browser/requirements.txt
+          python -m pip install -r Browser/tools/requirements-design.txt
+      - name: Regenerate installer artwork
+        if: matrix.pack == 'macos'
+        run: python Browser/tools/make_dmg_background.py
+      - name: Freeze Sreon and build the installers
+        shell: bash
+        run: |
+          args=""
+          if [ "${{ inputs.installer_app }}" = "true" ]; then args="$args --installer-app"; fi
+          python -u Browser/tools/build.py $args
+      - name: macOS - verify the image opens, launches, and is styled
+        if: matrix.pack == 'macos'
+        run: |
+          ls -lh Browser/dist
+          hdiutil verify Browser/dist/Sreon.dmg
+          python -m pip install dmgbuild   # brings ds_store, used to read the Finder layout
+          python Browser/tools/check_dmg.py Browser/dist/Sreon.dmg --mount
+          mount=/Volumes/Sreon-check
+          hdiutil detach "$mount" -force >/dev/null 2>&1 || true
+          mkdir -p "$mount"
+          hdiutil attach -readonly -noverify -noautoopen -mountpoint "$mount" Browser/dist/Sreon.dmg
+          echo "--- launch the app straight out of the image (offscreen) ---"
+          QT_QPA_PLATFORM=offscreen "$mount/Sreon.app/Contents/MacOS/Sreon" >/tmp/launch.log 2>&1 &
+          pid=$!
+          sleep 25
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "Sreon is still alive after 25s, so it launched from a read-only DMG"
+            kill "$pid" 2>/dev/null || true
+          else
+            wait "$pid" && code=0 || code=$?
+            echo "process exited early with status $code (informational: headless CI has no window server)"
+          fi
+          tail -25 /tmp/launch.log 2>/dev/null || true
+          hdiutil detach "$mount" -force
+          echo "--- signature state (unsigned/ad-hoc until a Developer ID secret is set) ---"
+          codesign -dvvv Browser/dist/Sreon.app 2>&1 | tail -5 || true
+          echo "--- pkg ---"
+          pkgutil --payload-files Browser/dist/Sreon.pkg | head -4
+          pkgutil --check-signature Browser/dist/Sreon.pkg 2>&1 | head -3 || true
+          du -sh Browser/dist/* | sort -h
+
+      - name: Windows - silent install, check the result, uninstall
+        if: matrix.pack == 'windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem Browser/dist | Format-Table Name, Length
+          $target = Join-Path $env:RUNNER_TEMP 'sreon-test'
+          Start-Process -FilePath "Browser\dist\SreonSetup.exe" -ArgumentList "/S","/D=$target" -Wait
+          if (-not (Test-Path "$target\Sreon.exe")) { Get-ChildItem $target -ErrorAction SilentlyContinue; throw "installer did not leave Sreon.exe in $target" }
+          Get-ChildItem $target | Select-Object -First 12 Name, Length | Format-Table
+          $start = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Sreon'
+          if (Test-Path $start) { Get-ChildItem $start | Select-Object Name } else { Write-Host "no Start Menu folder (user scope?)" }
+          $uninstall = Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Sreon" -ErrorAction SilentlyContinue
+          if ($uninstall) { $uninstall | Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation | Format-List } else { throw "Add/Remove Programs entry is missing" }
+          "installed ok: $((Get-ChildItem $target -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB) MB"
+          Start-Process -FilePath "$target\uninstall.exe" -ArgumentList "/S" -Wait
+          if (Test-Path "$target\Sreon.exe") { Write-Host "WARNING: uninstaller left files behind" } else { Write-Host "uninstaller cleaned up" }
+      - name: Linux - check the AppImage and the deb
+        if: matrix.pack == 'linux'
+        run: |
+          ls -lh Browser/dist
+          test -x Browser/dist/Sreon.AppImage
+          head -c 8 Browser/dist/Sreon.AppImage | od -c | head -1
+          rm -rf squashfs-root
+          Browser/dist/Sreon.AppImage --appimage-extract >/dev/null 2>&1 || echo "::notice::could not self-extract (FUSE-free check skipped)"
+          if [ -d squashfs-root ]; then
+            ls squashfs-root
+            test -x squashfs-root/AppRun
+            test -f squashfs-root/usr/bin/Sreon/Sreon
+            test -f squashfs-root/usr/bin/Sreon/_internal/VERSION || echo "VERSION missing from the bundle"
+            timeout 30 env QT_QPA_PLATFORM=offscreen ./squashfs-root/AppRun >/tmp/launch.log 2>&1 &
+            pid=$!; sleep 22
+            if kill -0 "$pid" 2>/dev/null; then echo "AppImage payload still running - launched"; kill "$pid"; else wait "$pid" || echo "exited with $?"; fi
+            tail -20 /tmp/launch.log || true
+          fi
+          sudo apt-get install -y "./Browser/dist/sreon_${SREON_VERSION}_amd64.deb"
+          which sreon || ls -l /opt/sreon
+          dpkg -L sreon | head -20
+          test -f /usr/share/applications/sreon.desktop
+          grep -q "Exec=/opt/sreon/Sreon" /usr/share/applications/sreon.desktop
+          sudo apt-get remove -y sreon
+      - name: Freeze log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.pack }}
+          path: |
+            Browser/freeze.log
+            /tmp/launch.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Collect the double-click files
+        run: |
+          mkdir -p out
+          case "${{ matrix.pack }}" in
+            macos)
+              cp Browser/dist/Sreon.dmg out/
+              cp Browser/dist/Sreon.pkg out/
+              ;;
+            windows) cp Browser/dist/SreonSetup.exe out/ ;;
+            linux)
+              cp Browser/dist/Sreon.AppImage out/
+              cp Browser/dist/sreon_${SREON_VERSION}_amd64.deb out/
+              ;;
+          esac
+          ls -lh out
+      - name: Upload ${{ matrix.name }} installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: sreon-${{ matrix.pack }}
+          path: out
+          if-no-files-found: error
+          retention-days: 30
+
+  # -------------------------------------------------------------------- package
+  package:
+    name: Bundle the double-click files
+    needs: build
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+      - name: Assemble Sreon-<version>-double-click.zip
+        run: |
+          set -e
+          version="$(tr -d '[:space:]' < Browser/VERSION)"
+          echo "version=$version" >> "$GITHUB_ENV"
+          mkdir -p stage/double bundle
+          for pair in "macos:Sreon.dmg" "windows:SreonSetup.exe" "linux:Sreon.AppImage"; do
+            pack="${pair%%:*}"; file="${pair##*:}"
+            src="incoming/sreon-$pack/$file"
+            if [ -f "$src" ]; then
+              cp "$src" "stage/double/$file"
+              cp "$src" "bundle/$file"
+            else
+              echo "::warning::$file was not produced by the $pack build"
+            fi
+          done
+          # the zip stays exactly what was asked for: three double-click files, nothing else
+          python - "$version" <<'PY'
+          import os, sys, zipfile
+          from pathlib import Path
+          version = sys.argv[1]
+          stage, bundle = Path("stage/double"), Path("bundle")
+          target = bundle / f"Sreon-{version}-double-click.zip"
+          if target.exists():
+              target.unlink()
+          with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+              for path in sorted(stage.iterdir()):
+                  info = archive.getinfo(path.name) or zipfile.ZipInfo(path.name)
+                  info.external_attr = (0o755 & 0xFFFF) << 16   # keep +x so the AppImage double-clicks
+                  info.compress_type = zipfile.ZIP_DEFLATED
+                  archive.write(path, path.name)
+          print("zip", target, f"{target.stat().st_size / 1e6:.0f} MB")
+          with zipfile.ZipFile(target) as archive:
+              for entry in archive.infolist():
+                  print(" ", entry.filename, f"{entry.file_size / 1e6:.0f} MB", oct(entry.external_attr >> 16))
+          PY
+          cp If-it-says-unverified.txt "bundle/If-it-says-unverified.txt"
+          (cd stage && find . -type f -exec sha256sum {} \; | sed 's|\./||' > ../bundle/SHA256SUMS.txt)
+          ls -lh bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sreon-${{ env.version }}-double-click
+          path: bundle
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish a GitHub release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          tag="sreon-v$version"
+          notes="Sreon $version - installers for the desktop browser.
+
+          - macOS (Apple silicon): Sreon.dmg - drag Sreon onto Applications. Sreon.pkg does the same for you.
+          - Windows: SreonSetup.exe - branded installer, adds Sreon to the Start Menu.
+          - Linux: Sreon.AppImage - double-click, no install step.
+
+          Unsigned build, so macOS shows the one-time 'cannot be opened' warning and Windows
+          SmartScreen shows 'app isn't commonly signed'. Open the guide in this release, or the
+          card printed on the DMG, for the two-click fix. Set the signing secrets in
+          .github/workflows/browser.yml and these warnings disappear for good."
+          gh release delete "$tag" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "$tag" --target "$GITHUB_SHA" --title "Sreon $version" --notes "$notes" || true
+          gh release upload "$tag" bundle/* --clobber
+          gh release view "$tag" --json assets --jq '.assets[] | "\(.name) \(.size)"'

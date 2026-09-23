@@ -1,0 +1,100 @@
+If your computer says Sreon is "not verified", "unidentified developer" or "not commonly signed"
+
+Short version: this is about signatures, not viruses. Sreon is free and open source, so
+nobody paid for the certificates that would let macOS and Windows vouch for it. Apple and
+Windows therefore warn on the very first launch. The warning disappears after one approval,
+and it goes away for everyone the day the builds are signed and notarised.
+
+We will never ask you to turn your security off. Please do not run "spctl --master-disable"
+or delete other people's quarantine flags: those weaken the whole machine, and they are not
+needed for Sreon. The two routes below are Apple's and Microsoft's own, documented ways.
+
+
+MAC
+===
+
+Installing
+----------
+1. Open Sreon.dmg. A window appears with Sreon on the left and Applications on the right.
+2. Drag Sreon onto Applications. That is the entire install; no other steps.
+3. Close the window and drag the "Sreon" disk image to the Bin (or right-click it > Eject).
+
+If the disk image itself will not open
+--------------------------------------
+Right-click Sreon.dmg in Downloads > Open > Open. (Some browsers mark files they
+downloaded; Finder asks you once to confirm where it came from.)
+
+If it says "Sreon cannot be opened" or "Apple cannot check it for malicious software"
+--------------------------------------------------------------------------------------
+Route A - System Settings (works on every macOS since Big Sur):
+1. Double-click Sreon so that the warning appears, then click Done or OK. Do not
+   move it to the Bin, and do not drag it anywhere.
+2. Click the Apple menu > System Settings > Privacy & Security.
+3. Scroll down to the Security section. You will see:
+   "Sreon" was blocked from use because it is not from an identified developer.
+4. Click Open Anyway, then click Open in the box that appears. You may be asked for
+   your Touch ID or login password.
+5. Launch Sreon from Applications or Launchpad. You only do this once, ever.
+
+Route B - right-click (faster on macOS 14 and earlier):
+1. In Finder, open Applications.
+2. Hold Control and click Sreon (or right-click) > Open.
+3. Click Open in the warning. Done.
+   Note: on macOS 15 Sequoia the Open entry is sometimes missing from that menu.
+   If you do not see it, use Route A.
+
+Prefer an installer instead of dragging?
+----------------------------------------
+Sreon.pkg does the same thing for you: double-click it, click Continue, and Sreon is put
+into Applications by the installer. If Gatekeeper blocks the package, the same two routes
+apply: right-click Sreon.pkg > Open, or Privacy & Security > Open Anyway.
+
+Still stuck?
+------------
+- Is it in Applications? Finder > Go > Applications. Sreon is not in your Downloads folder.
+- Apple silicon Macs need a valid code signature of some kind. Our build is ad-hoc signed,
+  which is enough to run but not enough for Gatekeeper to trust it - that is the warning.
+- The app never phones home to us; if you do not trust it yet, do not sign in anywhere with it.
+
+
+WINDOWS
+=======
+
+1. Run SreonSetup.exe. It installs to C:\Program Files\Sreon and adds Sreon to the Start Menu.
+2. Blue "Windows protected your PC" bar? Click More info, then Run anyway.
+   That screen appears because the installer has no publisher certificate; it is not a detection.
+3. If Windows blocks it completely: right-click SreonSetup.exe > Properties, tick Unblock
+   at the bottom of the General tab, OK, then run it again.
+4. Open Sreon from the Start Menu (search for "Sreon").
+
+Antivirus note: some scanners flag PyInstaller-built programs on sight because many
+throwaway malware samples are also PyInstaller-built. If your scanner quarantines Sreon,
+add an exclusion for the Sreon folder - or scan the file first at virustotal.com and see
+for yourself. Source is public, so you can also build it yourself from this repository.
+
+
+LINUX
+=====
+
+Double-click Sreon.AppImage: that is the whole install, nothing to run as root.
+- If nothing happens the first time: right-click > Properties > allow executing as
+  a program (or, in a terminal: chmod +x Sreon.AppImage).
+- "dlopen(): error loading libfuse.so.2" on Ubuntu 24.04 and Debian 13? Those releases
+  dropped the old FUSE library AppImages mount with. Either install it
+  (sudo apt install libfuse2t64), or run the same file once with the fallback:
+  ./Sreon.AppImage --appimage-extract-and-run
+- Prefer a real package? sudo dpkg -i sreon_0.5.1_amd64.deb installs to /opt/sreon and puts
+  Sreon in your applications menu.
+
+
+WHY THE WARNING EXISTS, AND HOW WE DELETE IT FOREVER
+=====================================================
+- macOS: "Developer ID Application" signing plus Apple notarisation (needs a $99/year Apple
+  Developer account). Then Gatekeeper never complains, and the hardened-runtime entitlements
+  in Browser/installer/mac/entitlements.plist are used.
+- Windows: an Authenticode certificate (a code-signing certificate; an EV certificate is what
+  makes the SmartScreen "unknown publisher" screen disappear immediately).
+- Both are wired but optional in CI: set the matching repository secrets and the next build is
+  signed automatically. See .github/workflows/browser.yml and Extra/HOW-IT-WORKS.md.
+
+The same guide ships inside the app: Help > If Sreon Won't Open...

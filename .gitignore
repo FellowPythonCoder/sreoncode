@@ -1,0 +1,32 @@
+# local dev
+.venv/
+node_modules/
+.env
+.env.*
+.cache/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+test-results/
+playwright-report/
+
+# frozen output (CI publishes these, the repo never carries them)
+dist/
+build/
+Browser/build/
+Browser/freeze.log
+Browser/engine/sreon-api
+Browser/engine/sreon-api.exe
+Browser/dist/
+*.dmg
+*.pkg
+*.AppImage
+*.deb
+*.exe
+*.app/
+Builds/*
+!Builds/.gitkeep
+artifacts/
+squashfs-root/
+Extra/Source/src-tauri/gen/

@@ -1,0 +1,142 @@
+name: Build Sreon desktop apps
+on:
+  workflow_dispatch:
+  push:
+    branches: [arena/01a0bffb-sreon-browser]
+    paths:
+      - Extra/**
+      - .github/workflows/desktop.yml
+permissions:
+  contents: read
+concurrency:
+  group: sreon-desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            name: Mac
+            bundles: app,dmg
+            target: '--target universal-apple-darwin'
+          - os: windows-latest
+            name: Windows
+            bundles: nsis
+            target: ''
+          - os: ubuntu-22.04
+            name: Linux
+            bundles: appimage,deb
+            target: ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: Extra/Source
+    steps:
+      - name: Preserve source line endings
+        working-directory: ${{ github.workspace }}
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Extra/Source/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+      - name: Install Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+      - name: Install Mac targets
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Extra/Source/src-tauri -> target
+          cache-on-failure: true
+      - run: npm ci
+      - name: Test Rust and integration API
+        run: node scripts/run-check.mjs cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features api
+      - name: Test assets and packaging
+        run: node scripts/run-check.mjs npm test
+      - name: Test interface
+        if: runner.os == 'macOS'
+        run: |
+          npx playwright install chromium
+          npm run test:ui
+      - name: Check live website results
+        id: live
+        run: |
+          if cargo run --manifest-path src-tauri/Cargo.toml --no-default-features --example live-search -- YouTube > live-search.json; then
+            node -e 'const fs=require("fs");const data=JSON.parse(fs.readFileSync("live-search.json","utf8"));const found=data.results.some(x=>["youtube.com","www.youtube.com"].includes(new URL(x.url).hostname));fs.appendFileSync(process.env.GITHUB_OUTPUT,"status="+(found?"YouTube website verified":"Live results received; YouTube destination not verified")+"\n");'
+          else
+            echo 'status=Web sources unavailable from this runner' >> "$GITHUB_OUTPUT"
+          fi
+      - name: "Live result: ${{ steps.live.outputs.status }}"
+        run: echo '${{ steps.live.outputs.status }}'
+      - name: Package app source and guide
+        run: |
+          python scripts/package-source.py --stage ../../artifacts
+          mkdir -p ../../artifacts/Extra/API
+      - name: Consolidate dependency licenses
+        run: node scripts/append-licenses.mjs
+      - name: Build app
+        run: node scripts/run-check.mjs npm run desktop:build -- ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+      - name: Build integration API
+        if: runner.os != 'macOS'
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features --features api --bin sreon-api
+      - name: Build universal integration API
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features --features api --bin sreon-api --target aarch64-apple-darwin
+          cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features --features api --bin sreon-api --target x86_64-apple-darwin
+          lipo -create src-tauri/target/aarch64-apple-darwin/release/sreon-api src-tauri/target/x86_64-apple-darwin/release/sreon-api -output ../../artifacts/Extra/API/sreon-api
+      - name: Test packaged integration API
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            python tests/api-smoke.py ../../artifacts/Extra/API/sreon-api
+          elif [ "$RUNNER_OS" = Windows ]; then
+            python tests/api-smoke.py src-tauri/target/release/sreon-api.exe
+          else
+            python tests/api-smoke.py src-tauri/target/release/sreon-api
+          fi
+      - name: Package Mac
+        if: runner.os == 'macOS'
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/Sreon.app ../../artifacts/Builds/Sreon-Mac.zip
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg ../../artifacts/Builds/
+          codesign --verify --deep --strict src-tauri/target/universal-apple-darwin/release/bundle/macos/Sreon.app
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        run: |
+          cp src-tauri/target/release/bundle/nsis/*.exe ../../artifacts/Builds/
+          cp src-tauri/target/release/sreon-api.exe ../../artifacts/Extra/API/
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          cp src-tauri/target/release/bundle/appimage/*.AppImage ../../artifacts/Builds/
+          cp src-tauri/target/release/bundle/deb/*.deb ../../artifacts/Builds/
+          cp src-tauri/target/release/sreon-api ../../artifacts/Extra/API/
+      - name: Package instructions
+        run: |
+          cp ../HOW-IT-WORKS.md ../../artifacts/Extra/HOW-IT-WORKS.md
+          printf '\n## Build check\n\nLive web search: %s. Third-party availability can change.\n' '${{ steps.live.outputs.status }}' >> ../../artifacts/Extra/HOW-IT-WORKS.md
+      - name: Verify two-folder package
+        run: python scripts/verify-package.py ../../artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sreon-${{ matrix.name }}
+          path: artifacts/
+          retention-days: 30

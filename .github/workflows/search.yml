@@ -1,0 +1,55 @@
+name: Check search sources
+on:
+  workflow_dispatch:
+  push:
+    branches: [arena/01a0bffb-sreon-browser]
+    paths: [.github/workflows/search.yml]
+permissions:
+  contents: read
+jobs:
+  sources:
+    runs-on: macos-14
+    steps:
+      - name: Check public web search feed
+        id: web
+        shell: python
+        run: |
+          import os, urllib.request, xml.etree.ElementTree as ET
+          url = 'https://www.bing.com/search?format=rss&q=YouTube&count=20'
+          request = urllib.request.Request(url, headers={'User-Agent':'Sreon/0.4.0 (https://github.com/FellowPythonCoder/Sreon-Browser)'})
+          try:
+              with urllib.request.urlopen(request, timeout=10) as response:
+                  tree = ET.fromstring(response.read(3000000))
+              links = [item.findtext('link', '') for item in tree.findall('./channel/item')]
+              status = 'YouTube web result verified' if any('youtube.com' in link for link in links) else 'No YouTube destination found'
+          except Exception as error:
+              status = 'Feed unavailable'
+              print(str(error))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('status=' + status + '\n')
+      - name: "Web source: ${{ steps.web.outputs.status }}"
+        run: echo '${{ steps.web.outputs.status }}'
+      - name: Check image and video sources
+        id: media
+        shell: python
+        run: |
+          import json, os, urllib.parse, urllib.request, xml.etree.ElementTree as ET
+          def get(url):
+              request = urllib.request.Request(url, headers={'User-Agent':'Sreon/0.4.0 (https://github.com/FellowPythonCoder/Sreon-Browser)'})
+              with urllib.request.urlopen(request, timeout=10) as response:
+                  return response.read(3000000)
+          try:
+              params = {'action':'query','format':'json','formatversion':'2','generator':'search','gsrnamespace':'6','gsrsearch':'forest filetype:bitmap','gsrlimit':'3','prop':'imageinfo','iiprop':'url|extmetadata','iiurlwidth':'480'}
+              data = json.loads(get('https://commons.wikimedia.org/w/api.php?' + urllib.parse.urlencode(params)))
+              images = any(page.get('imageinfo',[{}])[0].get('thumburl','').startswith(('https://upload.wikimedia.org/', 'https://thumb.wikimedia.org/')) for page in data.get('query',{}).get('pages',[]))
+              params = {'format':'rss','q':'cats (site:youtube.com/watch OR site:vimeo.com OR site:dailymotion.com/video)','count':'20'}
+              rss = ET.fromstring(get('https://www.bing.com/search?' + urllib.parse.urlencode(params)))
+              videos = any('youtube.com/watch?' in item.findtext('link','') or 'vimeo.com/' in item.findtext('link','') for item in rss.findall('./channel/item'))
+              status = 'Images ' + ('verified' if images else 'unavailable') + '; videos ' + ('verified' if videos else 'unavailable')
+          except Exception as error:
+              status = 'Media sources unavailable from this runner'
+              print(str(error))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              output.write('status=' + status + '\n')
+      - name: "Media sources: ${{ steps.media.outputs.status }}"
+        run: echo '${{ steps.media.outputs.status }}'

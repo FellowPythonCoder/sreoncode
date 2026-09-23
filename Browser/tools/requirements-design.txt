@@ -1,0 +1,6 @@
+# Only needed to regenerate the installer artwork / build the .dmg. The app itself
+# never imports these, so they stay out of requirements.txt.
+pillow==12.3.0
+fonttools==4.60.1
+brotli==1.2.0
+dmgbuild>=1.6,<2 ; sys_platform == "darwin"

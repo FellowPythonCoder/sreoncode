@@ -160,23 +160,33 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
           function Notify([string]$what, $detail) {
-            $text = ($detail | Out-String)
-            $text = $text -replace "`r|`n", ' ' -replace '%', '/'
-            if ($text.Length -gt 1000) { $text = $text.Substring($text.Length - 1000) }
+            $text = ($detail | Out-String) -replace "`r|`n", ' ' -replace '%', '/'
+            if ($text.Length -gt 1100) { $text = $text.Substring($text.Length - 1100) }
             Write-Host "::error::$what failed: $text"
             throw "$what failed"
           }
           $out = choco install nsis -y --no-progress 2>&1
           if ($LASTEXITCODE -ne 0) { Notify "choco install nsis" $out }
-          $exe = Get-ChildItem -Path 'C:\Program Files (x86)\NSIS','C:\Program Files\NSIS','C:\ProgramData\chocolatey' \
-                 -Filter makensis.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) { Notify "locate makensis" "makensis.exe not found after installing NSIS; choco said: $out" }
-          $dir = $exe.DirectoryName
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-          "NSIS at $dir"
-          $version = & $exe.FullName /VERSION
+          # choco deploys NSIS under Program Files (x86) and shims makensis into its own bin
+          # directory; which one ends up on PATH depends on the image, so try them in order.
+          $candidates = @((Get-Command makensis.exe -ErrorAction SilentlyContinue).Source,
+                          'C:\Program Files (x86)\NSIS\makensis.exe',
+                          'C:\Program Files\NSIS\makensis.exe',
+                          'C:\ProgramData\chocolatey\bin\makensis.exe')
+          $exe = $null
+          foreach ($candidate in $candidates) {
+            if ($candidate -and (Test-Path -LiteralPath $candidate)) { $exe = (Get-Item -LiteralPath $candidate).FullName; break }
+          }
+          if (-not $exe) {
+            $found = Get-ChildItem -Path 'C:\Program Files (x86)\NSIS' -Filter makensis.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $exe = $found.FullName }
+          }
+          if (-not $exe) { Notify "locate makensis" "no makensis.exe among: $($candidates -join ', ')" }
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path $exe)
+          $version = & $exe /VERSION
           if ($LASTEXITCODE -ne 0) { Notify "makensis /VERSION" "exit $LASTEXITCODE" }
-          "makensis $version"
+          "makensis $version at $exe"
+
       - name: Install Python dependencies
         run: |
           python -m pip install -U pip
@@ -220,33 +230,10 @@ jobs:
             fi
             cat "/tmp/${name}.log"
           }
-          ls -lh Browser/dist
-          hdiutil verify Browser/dist/Sreon.dmg
-          python -m pip install dmgbuild   # brings ds_store, used to read the Finder layout
-          run_step dmgcheck python Browser/tools/check_dmg.py Browser/dist/Sreon.dmg --mount
-          mount=/Volumes/Sreon-check
-          hdiutil detach "$mount" -force >/dev/null 2>&1 || true
-          mkdir -p "$mount"
-          hdiutil attach -readonly -noverify -noautoopen -mountpoint "$mount" Browser/dist/Sreon.dmg
-          echo "--- launch the app straight out of the image (offscreen) ---"
-          QT_QPA_PLATFORM=offscreen "$mount/Sreon.app/Contents/MacOS/Sreon" >/tmp/launch.log 2>&1 &
-          pid=$!
-          sleep 25
-          if kill -0 "$pid" 2>/dev/null; then
-            echo "Sreon is still alive after 25s, so it launched from a read-only DMG"
-            kill "$pid" 2>/dev/null || true
-          else
-            wait "$pid" && code=0 || code=$?
-            echo "process exited early with status $code (informational: headless CI has no window server)"
-          fi
-          tail -25 /tmp/launch.log 2>/dev/null || true
-          hdiutil detach "$mount" -force
-          echo "--- signature state (unsigned/ad-hoc until a Developer ID secret is set) ---"
-          codesign -dvvv Browser/dist/Sreon.app 2>&1 | tail -5 || true
-          echo "--- pkg ---"
-          pkgutil --payload-files Browser/dist/Sreon.pkg | head -4
-          pkgutil --check-signature Browser/dist/Sreon.pkg 2>&1 | head -3 || true
-          du -sh Browser/dist/* | sort -h
+          # ds_store is what lets check_dmg.py read the Finder layout records; the styled
+          # image is worthless to us if we cannot prove those records were written.
+          run_step dsstore python -m pip install ds_store
+          run_step macverify bash Browser/tools/ci-verify-macos.sh Browser/dist
 
       - name: Windows - silent install, check the result, uninstall
         if: matrix.pack == 'windows'

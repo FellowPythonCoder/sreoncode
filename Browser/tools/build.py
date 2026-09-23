@@ -129,7 +129,7 @@ class Builder:
         path = ROOT / "build" / "sreon-version.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         parts = (self.version.split(".") + ["0", "0", "0"])[:4]
-        numeric = ",".join(part)
+        numeric = ",".join(part for part in parts)
         body = ("# UTF-8\n"
                 "VSVersionInfo(\n"
                 "  ffi=FixedFileInfo(filevers=(" + numeric + "), prodvers=(" + numeric + "),\n"
@@ -185,26 +185,34 @@ class Builder:
         self.run(command)
 
     def app(self):
-        guide = ROOT.parent / "If-it-says-unverified.txt"
+        guide = REPO / "If-it-says-unverified.txt"
         self.pyinstaller(Path("app/main.py"), "Sreon",
                          data=[(ROOT / "assets", "assets"), (ROOT / "engine", "engine"),
                                (ROOT / "VERSION", "."), (guide, ".")])
-        app = self.app_bundle()
-        if app is None:
-            raise SystemExit("PyInstaller did not produce the Sreon bundle")
-        # PyInstaller 6 drops collected data under _internal (or Contents/Resources in a
-        # .app). Verify the extras the app reads at runtime really travelled with it.
-        roots = [app / "Contents" / "Resources", self.app_dir() / "_internal", self.app_dir()] \
-            if app is not None else [self.app_dir() / "_internal", self.app_dir()]
+        launcher = "Sreon.exe" if sys.platform == "win32" else "Sreon"
+        bundle = self.app_bundle()
+        if sys.platform == "darwin":
+            if bundle is None:
+                raise SystemExit("PyInstaller finished without producing dist/Sreon.app")
+            roots = [bundle / "Contents" / "Resources"]
+            found = bundle / "Contents" / "MacOS" / launcher
+            kind = "app bundle"
+        else:
+            directory = self.app_dir()
+            roots = [directory / "_internal", directory]
+            found = directory / launcher
+            kind = "app folder"
+        if not found.is_file():
+            raise SystemExit(f"PyInstaller produced no launcher at {found}")
+
+        # PyInstaller 6 keeps collected data under _internal (or Contents/Resources in a
+        # .app). Check the files the app reads at runtime really travelled with it, or a
+        # frozen Sreon would silently lose its start page, its engine and its guide.
         for required in ("assets", "engine", "VERSION", "If-it-says-unverified.txt"):
             if not any((root / required).exists() for root in roots if root.is_dir()):
-                raise SystemExit(f"bundle is missing {required!r}; the frozen app would "
-                                 "not find its search engine or start page")
-        launcher = "Sreon.exe" if sys.platform == "win32" else "Sreon"
-        if app is not None:
-            self.record(app / "Contents" / "MacOS" / launcher, "app bundle")
-        else:
-            self.record(self.app_dir() / launcher, "app")
+                raise SystemExit(f"bundle is missing {required!r} (looked in "
+                                 + ", ".join(str(root) for root in roots) + ")")
+        self.record(found, kind)
 
     def app_dir(self) -> Path:
         """The onedir folder (Windows/Linux) that holds Sreon(.exe)."""
@@ -279,10 +287,25 @@ class Builder:
         source = self.app_dir()
         if not (source / "Sreon.exe").is_file():
             raise SystemExit(f"no Sreon.exe in {source}")
-        makensis = shutil.which("makensis") or shutil.which("makensis.exe")
-        if not makensis:
-            self.note("makensis not found - install NSIS (brew install nsis / choco install nsis)")
-            return
+        makensis = None
+        for candidate in ("makensis", "makensis.exe"):
+            found = shutil.which(candidate)
+            if found:
+                makensis = found
+                break
+        if makensis is None:
+            # choco/brew/manual installs are not always on PATH in the same shell
+            for guess in ("C:/Program Files (x86)/NSIS/makensis.exe",
+                          "C:/Program Files/NSIS/makensis.exe",
+                          "/usr/local/bin/makensis", "/opt/homebrew/bin/makensis",
+                          "/usr/bin/makensis"):
+                if Path(guess).is_file():
+                    makensis = guess
+                    break
+        if makensis is None:
+            raise SystemExit("makensis not found - install NSIS (choco install nsis / "
+                             "brew install nsis / apt install nsis) or pass --only without nsis")
+        print("makensis:", makensis, flush=True)
         out = self.dist / "SreonSetup.exe"
         if out.exists():
             out.unlink()
@@ -362,7 +385,7 @@ class Builder:
             (root / directory).mkdir(parents=True, exist_ok=True)
         (root / "usr" / "share" / "applications" / "sreon.desktop").write_text(
             "[Desktop Entry]\nType=Application\nName=Sreon\nGenericName=Web Browser\n"
-            "Comment=Search privately. Browse freely.\nExec=/opt/sreon/Sreon %%u\nIcon=sreon\n"
+            "Comment=Search privately. Browse freely.\nExec=/opt/sreon/Sreon %u\nIcon=sreon\n"
             "Terminal=false\nCategories=Network;WebBrowser;\nStartupWMClass=Sreon\n"
             "Keywords=browser;private;search;\n", encoding="utf-8")
         icons = root / "usr" / "share" / "icons" / "hicolor" / "256x256" / "apps"
@@ -385,11 +408,20 @@ Description: Sreon - private browser
  Websites need internet access. Queries go to the public search sources the
  built-in engine adapts; Sreon itself never phones home.
 """, encoding="utf-8")
-        (root / "DEBIAN" / "changelog.Debian").write_text(
-            f"sreon ({self.version}) stable; urgency=low\n\n"
-            f"  * Sreon {self.version}.\n\n -- Sreon <sreon@localhost>  "
-            f"{subprocess.run(['date', '-R'], capture_output=True, text=True).stdout.strip()}\n",
-            encoding="utf-8")
+        doc = root / "usr" / "share" / "doc" / "sreon"
+        doc.mkdir(parents=True, exist_ok=True)
+        date = subprocess.run(["date", "-R"], capture_output=True, text=True).stdout.strip()
+        import gzip
+        with gzip.open(doc / "changelog.Debian.gz", "wb") as handle:
+            handle.write(f"sreon ({self.version}) stable; urgency=low\n"
+                         f"\n  * Sreon {self.version}: installer artwork, native AppImage and\n"
+                         "    deb packaging, corrected Gatekeeper guidance.\n"
+                         f"\n -- Sreon <sreon@localhost>  {date}\n".encode("utf-8"))
+        (doc / "README.Debian").write_text(
+            "Sreon is installed in /opt/sreon and started from /usr/share/applications/sreon.desktop.\n"
+            "Your profile lives in $XDG_DATA_HOME/sreon (usually ~/.local/share/sreon).\n"
+            "If Sreon will not open, read /opt/sreon/If-it-says-unverified.txt.\n", encoding="utf-8")
+
         out = self.dist / f"sreon_{self.version}_{self.arch if self.arch != 'x86_64' else 'amd64'}.deb"
         if out.exists():
             out.unlink()

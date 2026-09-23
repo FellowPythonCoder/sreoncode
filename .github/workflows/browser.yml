@@ -158,9 +158,25 @@ jobs:
         if: matrix.pack == 'windows'
         shell: pwsh
         run: |
-          choco install nsis -y --no-progress
-          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          makensis /VERSION
+          $ErrorActionPreference = 'Continue'
+          function Notify([string]$what, $detail) {
+            $text = ($detail | Out-String)
+            $text = $text -replace "`r|`n", ' ' -replace '%', '/'
+            if ($text.Length -gt 1000) { $text = $text.Substring($text.Length - 1000) }
+            Write-Host "::error::$what failed: $text"
+            throw "$what failed"
+          }
+          $out = choco install nsis -y --no-progress 2>&1
+          if ($LASTEXITCODE -ne 0) { Notify "choco install nsis" $out }
+          $exe = Get-ChildItem -Path 'C:\Program Files (x86)\NSIS','C:\Program Files\NSIS','C:\ProgramData\chocolatey' \
+                 -Filter makensis.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { Notify "locate makensis" "makensis.exe not found after installing NSIS; choco said: $out" }
+          $dir = $exe.DirectoryName
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          "NSIS at $dir"
+          $version = & $exe.FullName /VERSION
+          if ($LASTEXITCODE -ne 0) { Notify "makensis /VERSION" "exit $LASTEXITCODE" }
+          "makensis $version"
       - name: Install Python dependencies
         run: |
           python -m pip install -U pip

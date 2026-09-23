@@ -98,6 +98,17 @@ def artwork() -> tuple[Path, Path]:
     return one, two
 
 
+def _setfile_exists() -> bool:
+    """dmgbuild hides the .app extension and blesses the volume icon with SetFile.
+
+    That tool ships with Xcode, not always with the command-line tools, and dmgbuild lets
+    a missing binary escape as an exception - which would throw away the styled image and
+    silently downgrade everyone to the plain folder. So: only ask for those two touches
+    when SetFile is really there, and retry without them if anything still goes wrong.
+    """
+    return Path("/usr/bin/SetFile").is_file()
+
+
 def build_with_dmgbuild(app: Path, out: Path) -> bool:
     try:
         from dmgbuild.core import build_dmg
@@ -123,20 +134,24 @@ def build_with_dmgbuild(app: Path, out: Path) -> bool:
         "show_toolbar": False,
         "show_pathbar": False,
         "show_sidebar": False,
-        "hide_extensions": [app.name],
     }
-    volume_icon = ROOT / "assets" / "icon.icns"
-    if volume_icon.is_file():
-        settings["icon"] = str(volume_icon)
-    if out.exists():
-        out.unlink()
-    log("dmgbuild ->", out)
-    try:
-        build_dmg(str(out), VOLUME_NAME, settings=settings, lookForHiDPI=True, detach_retries=20)
-    except Exception as error:            # dmgbuild shells out to hdiutil; anything can happen in CI
-        log("dmgbuild failed:", type(error).__name__, str(error)[-600:])
-        return False
-    return out.is_file() and out.stat().st_size > 1_000_000
+    cosmetics = {"hide_extensions": [app.name], "icon": str(ROOT / "assets" / "icon.icns")} \
+        if _setfile_exists() and (ROOT / "assets" / "icon.icns").is_file() else {}
+    for attempt, extra in enumerate((cosmetics, {})):
+        options = {**settings, **extra}
+        if out.exists():
+            out.unlink()
+        log(f"dmgbuild -> {out} (attempt {attempt + 1}, "
+            f"{'with' if extra else 'without'} SetFile-only options)")
+        try:
+            build_dmg(str(out), VOLUME_NAME, settings=options, lookForHiDPI=True, detach_retries=20)
+        except Exception as error:        # dmgbuild shells out to hdiutil; anything can happen in CI
+            log("dmgbuild failed:", type(error).__name__, str(error)[-600:])
+            continue
+        if out.is_file() and out.stat().st_size > 1_000_000:
+            return True
+        log("dmgbuild reported success but produced no usable image")
+    return False
 
 
 def build_plain(app: Path, out: Path) -> None:
